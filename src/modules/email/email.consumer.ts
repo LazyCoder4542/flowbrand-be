@@ -9,6 +9,16 @@ export default class EmailQueueConsumer {
   private logger = new Logger(EmailQueueConsumer.name);
   constructor(private readonly mailerService: MailerService) {}
 
+  private handleFailure(error: unknown, job: Job<MailInterface>, context: string): never {
+    this.logger.error({
+      message: `${context} failed`,
+      error: error instanceof Error ? error.message : String(error),
+      jobId: job.id,
+      recipient: job.data?.mail?.to,
+    });
+    throw error instanceof Error ? error : new Error(String(error));
+  }
+
   @Process('welcome')
   async sendWelcomeEmailJob(job: Job<MailInterface>) {
     try {
@@ -22,7 +32,7 @@ export default class EmailQueueConsumer {
       });
       this.logger.log(`Welcome email sent successfully to ${mail.to}`);
     } catch (sendWelcomeEmailJobError) {
-      this.logger.error(`EmailQueueConsumer ~ sendWelcomeEmailJobError:  ${sendWelcomeEmailJobError}`);
+      this.handleFailure(sendWelcomeEmailJobError, job, 'sendWelcomeEmailJob');
     }
   }
 
@@ -40,7 +50,7 @@ export default class EmailQueueConsumer {
       });
       this.logger.log(`Waitlist email sent successfully to ${mail.to}`);
     } catch (sendWaitlistEmailJobError) {
-      this.logger.error(`EmailQueueConsumer ~ sendWaitlistEmailJobError: ${sendWaitlistEmailJobError}`);
+      this.handleFailure(sendWaitlistEmailJobError, job, 'sendWaitlistEmailJob');
     }
   }
 
@@ -58,7 +68,7 @@ export default class EmailQueueConsumer {
       });
       this.logger.log(`Reset password email sent successfully to ${mail.to}`);
     } catch (sendResetPasswordEmailJobError) {
-      this.logger.error(`EmailQueueConsumer ~ sendResetPasswordEmailJobError: ${sendResetPasswordEmailJobError}`);
+      this.handleFailure(sendResetPasswordEmailJobError, job, 'sendResetPasswordEmailJob');
     }
   }
 
@@ -75,7 +85,7 @@ export default class EmailQueueConsumer {
       });
       this.logger.log(`Newsletter email sent successfully to ${mail.to}`);
     } catch (sendNewsletterEmailJobError) {
-      this.logger.error(`EmailQueueConsumer ~ sendNewsletterEmailJobError:   ${sendNewsletterEmailJobError}`);
+      this.handleFailure(sendNewsletterEmailJobError, job, 'sendNewsletterEmailJob');
     }
   }
 
@@ -92,7 +102,7 @@ export default class EmailQueueConsumer {
       });
       this.logger.log(`Register OTP email sent successfully to ${mail.to}`);
     } catch (sendTokenEmailJobError) {
-      this.logger.error(`EmailQueueConsumer ~ sendTokenEmailJobError:   ${sendTokenEmailJobError}`);
+      this.handleFailure(sendTokenEmailJobError, job, 'sendTokenEmailJob');
     }
   }
 
@@ -109,7 +119,7 @@ export default class EmailQueueConsumer {
       });
       this.logger.log(`Login OTP email sent successfully to ${mail.to}`);
     } catch (sendLoginOtpEmailJobError) {
-      this.logger.error(`EmailQueueConsumer ~ sendLoginOtpEmailJobError:   ${sendLoginOtpEmailJobError}`);
+      this.handleFailure(sendLoginOtpEmailJobError, job, 'sendLoginOtpEmailJob');
     }
   }
 
@@ -127,7 +137,7 @@ export default class EmailQueueConsumer {
       });
       this.logger.log(`Notification email sent successfully to ${mail.to}`);
     } catch (sendLoginOtpEmailJobError) {
-      this.logger.error(`EmailQueueConsumer ~ sendLoginOtpEmailJobError:   ${sendLoginOtpEmailJobError}`);
+      this.handleFailure(sendLoginOtpEmailJobError, job, 'sendNotificationMail');
     }
   }
 }
