@@ -20,26 +20,34 @@ import QueueService from './queue.service';
     }),
     MailerModule.forRootAsync({
       imports: [ConfigModule],
-      useFactory: async (configService: ConfigService) => ({
-        transport: {
-          host: configService.get<string>('SMTP_HOST'),
-          port: configService.get<number>('SMTP_PORT'),
-          auth: {
-            user: configService.get<string>('SMTP_USER'),
-            pass: configService.get<string>('SMTP_PASSWORD'),
+      useFactory: async (configService: ConfigService) => {
+        const smtpUser =
+          configService.get<string>('RESEND_SMTP_USER') ??
+          configService.get<string>('SMTP_USER') ??
+          'onboarding@resend.dev';
+        return {
+          transport: {
+            host: configService.get<string>('RESEND_SMTP_HOST') ?? configService.get<string>('SMTP_HOST'),
+            port: Number(
+              configService.get<string>('RESEND_SMTP_PORT') ?? configService.get<string>('SMTP_PORT') ?? 587
+            ),
+            auth: {
+              user: smtpUser,
+              pass: configService.get<string>('RESEND_SMTP_API_KEY') ?? configService.get<string>('SMTP_PASSWORD'),
+            },
           },
-        },
-        defaults: {
-          from: `"Team Remote Bingo" <${configService.get<string>('SMTP_USER')}>`,
-        },
-        template: {
-          dir: process.cwd() + '/src/modules/email/hng-templates',
-          adapter: new HandlebarsAdapter(),
-          options: {
-            strict: true,
+          defaults: {
+            from: configService.get<string>('MAIL_FROM') ?? `"FlowBrand" <${smtpUser}>`,
           },
-        },
-      }),
+          template: {
+            dir: process.cwd() + '/src/modules/email/hng-templates',
+            adapter: new HandlebarsAdapter(),
+            options: {
+              strict: true,
+            },
+          },
+        };
+      },
       inject: [ConfigService],
     }),
     ConfigModule,
