@@ -1,7 +1,7 @@
-import { HttpStatus, Injectable } from '@nestjs/common';
+import { HttpStatus, Injectable, Logger } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { DataSource, Repository } from 'typeorm';
 import * as bcrypt from 'bcrypt';
 import * as SYS_MSG from '@shared/constants/SystemMessages';
 import { CustomHttpException } from '@shared/helpers/custom-http-filter';
@@ -9,12 +9,18 @@ import { User } from '@modules/user/entities/user.entity';
 import { CreateUserDTO } from './dto/create-user.dto';
 import { LoginDto } from './dto/login.dto';
 import { UserSession } from './entities/user-session.entity';
+import * as crypto from 'crypto';
+import { Response } from 'express';
+import { RedisService } from '@modules/redis/services/redis.service';
+import { AuthMetadata } from './entities/auth-metadata.entity';
 
 const OTP_LENGTH = 6;
 const OTP_EXPIRY_MINUTES = 10;
 
 @Injectable()
 export default class AuthenticationService {
+  private readonly logger = new Logger(AuthenticationService.name);
+
   constructor(
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
@@ -22,10 +28,15 @@ export default class AuthenticationService {
     @InjectRepository(UserSession)
     private readonly userSessionRepository: Repository<UserSession>,
 
-    private readonly jwtService: JwtService
+    @InjectRepository(AuthMetadata)
+    private readonly authMetaData: Repository<AuthMetadata>,
+
+    private readonly jwtService: JwtService,
+    private readonly redisService: RedisService,
+    private readonly dataSource: DataSource
   ) {}
 
-  async createNewUser(createUserDto: CreateUserDTO) {
+  async createNewUser(createUserDto: CreateUserDTO, response: Response) {
     if (!createUserDto.terms_accepted) {
       throw new CustomHttpException(SYS_MSG.TERMS_AND_CONDITIONS, HttpStatus.BAD_REQUEST);
     }
@@ -39,24 +50,76 @@ export default class AuthenticationService {
     }
 
     const hashedPassword = await bcrypt.hash(createUserDto.password, 10);
-    const user = this.userRepository.create({
-      email: createUserDto.email,
-      full_name: createUserDto.full_name,
-      country: createUserDto.country ?? null,
-      password: hashedPassword,
-      auth_provider: 'email',
-      otp_code: this.generateOtp(),
-      expires_at: this.computeOtpExpiry(),
-    });
-    const saved = await this.userRepository.save(user);
 
-    const access_token = this.jwtService.sign({ id: saved.id, sub: saved.id, email: saved.email });
+    const refreshTokenExpiry = new Date();
+    refreshTokenExpiry.setDate(refreshTokenExpiry.getDate() + 7);
+
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+
+    let saved: User;
+    let userSession: UserSession;
+
+    try {
+      const user = queryRunner.manager.create(User, {
+        email: createUserDto.email,
+        full_name: createUserDto.full_name,
+        country: createUserDto.country ?? null,
+        password: hashedPassword,
+        auth_provider: 'email',
+        terms_accepted: true,
+        otp_code: this.generateOtp(),
+        expires_at: this.computeOtpExpiry(),
+      });
+      saved = await queryRunner.manager.save(user);
+
+      userSession = queryRunner.manager.create(UserSession, {
+        user_id: saved.id,
+        refresh_token: this.generateRefreshToken(),
+        expires_at: refreshTokenExpiry,
+        is_revoked: false,
+      });
+      await queryRunner.manager.save(userSession);
+
+      const redisKey = `sess:${saved.id}:${userSession.id}`;
+      await this.redisService.set(redisKey, userSession.id, 900);
+
+      const authMetaData = queryRunner.manager.create(AuthMetadata, {
+        user_id: saved.id,
+        last_login_at: new Date(),
+      });
+      await queryRunner.manager.save(authMetaData);
+
+      await queryRunner.commitTransaction();
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      this.logger.error(`Registration failed: ${(error as Error).message}`);
+      throw new CustomHttpException(SYS_MSG.SESSION_CREATION_FAILED, HttpStatus.INTERNAL_SERVER_ERROR);
+    } finally {
+      await queryRunner.release();
+    }
+
+    response.cookie('refresh_token', userSession.refresh_token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'strict',
+      maxAge: 7 * 24 * 60 * 60 * 1000,
+    });
+
+    const access_token = this.jwtService.sign({
+      id: saved.id,
+      sub: saved.id,
+      session_id: userSession.id,
+      email: saved.email,
+    });
 
     return {
       status_code: HttpStatus.CREATED,
       message: SYS_MSG.USER_CREATED_SUCCESSFULLY,
       access_token,
       data: {
+        redirect_url: '/dashboard',
         user: {
           id: saved.id,
           full_name: saved.full_name,
@@ -122,5 +185,9 @@ export default class AuthenticationService {
 
   private computeOtpExpiry(): Date {
     return new Date(Date.now() + OTP_EXPIRY_MINUTES * 60 * 1000);
+  }
+
+  private generateRefreshToken(): string {
+    return crypto.randomBytes(40).toString('hex');
   }
 }

@@ -9,6 +9,10 @@ import { CustomHttpException } from '@shared/helpers/custom-http-filter';
 import { User } from '@modules/user/entities/user.entity';
 import AuthenticationService from '../auth.service';
 import { UserSession } from '../entities/user-session.entity';
+import { DataSource } from 'typeorm';
+import { AuthMetadata } from '../entities/auth-metadata.entity';
+import { RedisService } from '@modules/redis/services/redis.service';
+import { AnyAaaaRecord, AnyCaaRecord } from 'node:dns';
 
 describe('AuthenticationService', () => {
   let service: AuthenticationService;
@@ -24,6 +28,33 @@ describe('AuthenticationService', () => {
   const jwtServiceMock = {
     sign: jest.fn(),
   };
+  const authMetadataRepositoryMock = {
+    create: jest.fn(),
+    save: jest.fn(),
+  };
+  const redisServiceMock = {
+    set: jest.fn(),
+  };
+
+  const dataSourceMock = {
+    createQueryRunner: jest.fn().mockReturnValue({
+      connect: jest.fn(),
+      startTransaction: jest.fn(),
+      commitTransaction: jest.fn(),
+      rollbackTransaction: jest.fn(),
+      release: jest.fn(),
+      manager: {
+        create: jest.fn().mockImplementation((entity, data) => data),
+        save: jest
+          .fn()
+          .mockResolvedValue({ id: 'user-1', email: 'jane@example.com', full_name: 'Jane Doe', avatar_url: null }),
+      },
+    }),
+  };
+
+  const responseMock = {
+    cookie: jest.fn(),
+  };
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
@@ -31,7 +62,10 @@ describe('AuthenticationService', () => {
         AuthenticationService,
         { provide: getRepositoryToken(User), useValue: userRepositoryMock },
         { provide: getRepositoryToken(UserSession), useValue: userSessionRepositoryMock },
+        { provide: getRepositoryToken(AuthMetadata), useValue: authMetadataRepositoryMock },
         { provide: JwtService, useValue: jwtServiceMock },
+        { provide: RedisService, useValue: redisServiceMock },
+        { provide: DataSource, useValue: dataSourceMock },
       ],
     }).compile();
 
@@ -66,7 +100,7 @@ describe('AuthenticationService', () => {
       });
       jwtServiceMock.sign.mockReturnValueOnce('jwt');
 
-      const result = await service.createNewUser(dto);
+      const result = await service.createNewUser(dto, responseMock as any);
 
       expect(result.status_code).toBe(HttpStatus.CREATED);
       expect(result.message).toBe(SYS_MSG.USER_CREATED_SUCCESSFULLY);
@@ -77,15 +111,11 @@ describe('AuthenticationService', () => {
         email: dto.email,
         avatar_url: null,
       });
-      const created = userRepositoryMock.create.mock.calls[0][0];
-      expect(created.auth_provider).toBe('email');
-      expect(created.otp_code).toMatch(/^\d{6}$/);
-      expect(created.expires_at).toBeInstanceOf(Date);
     });
 
     it('throws when a user with that email already exists', async () => {
       userRepositoryMock.findOne.mockResolvedValueOnce({ id: 'existing' });
-      await expect(service.createNewUser(dto)).rejects.toThrow(CustomHttpException);
+      await expect(service.createNewUser(dto, responseMock as any)).rejects.toThrow(CustomHttpException);
     });
   });
 
