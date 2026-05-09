@@ -51,5 +51,5 @@ export class CreateUserDTO {
   })
   @IsBoolean()
   @IsNotEmpty()
-  terms_accepted: boolean
+  terms_accepted: boolean;
 }

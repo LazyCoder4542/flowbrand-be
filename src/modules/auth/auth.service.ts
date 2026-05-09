@@ -68,7 +68,7 @@ export default class AuthenticationService {
         country: createUserDto.country ?? null,
         password: hashedPassword,
         auth_provider: 'email',
-        terms_accepted: true,
+        terms_accepted: createUserDto.terms_accepted,
         otp_code: this.generateOtp(),
         expires_at: this.computeOtpExpiry(),
       });
@@ -87,15 +87,29 @@ export default class AuthenticationService {
 
       const authMetaData = queryRunner.manager.create(AuthMetadata, {
         user_id: saved.id,
-        last_login_at: new Date(),
+        last_login_at: null,
       });
       await queryRunner.manager.save(authMetaData);
 
       await queryRunner.commitTransaction();
     } catch (error) {
       await queryRunner.rollbackTransaction();
-      this.logger.error(`Registration failed: ${(error as Error).message}`);
-      throw new CustomHttpException(SYS_MSG.SESSION_CREATION_FAILED, HttpStatus.INTERNAL_SERVER_ERROR);
+      const err = error as Error;
+      this.logger.error(`Registration failed: ${err.message}`, err.stack);
+
+      // Map error types to specific messages
+      let errorMessage = SYS_MSG.SESSION_CREATION_FAILED;
+      let statusCode = HttpStatus.INTERNAL_SERVER_ERROR;
+
+      if (err.name === 'QueryFailedError') {
+        errorMessage = 'Database error occurred during registration';
+        this.logger.error('DB_ERROR during registration', err);
+      } else if (err.message?.includes('Redis') || err.message?.includes('redis')) {
+        errorMessage = 'Session storage error occurred';
+        this.logger.error('REDIS_ERROR during registration', err);
+      }
+
+      throw new CustomHttpException(errorMessage, statusCode);
     } finally {
       await queryRunner.release();
     }

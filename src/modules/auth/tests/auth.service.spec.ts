@@ -12,7 +12,6 @@ import { UserSession } from '../entities/user-session.entity';
 import { DataSource } from 'typeorm';
 import { AuthMetadata } from '../entities/auth-metadata.entity';
 import { RedisService } from '@modules/redis/services/redis.service';
-import { AnyAaaaRecord, AnyCaaRecord } from 'node:dns';
 
 describe('AuthenticationService', () => {
   let service: AuthenticationService;

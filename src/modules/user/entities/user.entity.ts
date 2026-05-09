@@ -38,7 +38,7 @@ export class User extends AbstractBaseEntity {
   expires_at: Date;
 
   @Column({ type: 'boolean', nullable: false, default: false })
-  terms_accepted: boolean
+  terms_accepted: boolean;
 
   @DeleteDateColumn({ name: 'deleted_at', type: 'timestamp', nullable: true })
   deleted_at: Date | null;
