@@ -16,7 +16,7 @@ export class ResponseInterceptor implements NestInterceptor {
   private readonly logger = new Logger(ResponseInterceptor.name);
   intercept(context: ExecutionContext, next: CallHandler): Observable<unknown> {
     return next.handle().pipe(
-      map((res: any) => this.responseHandler(res, context)),
+      map((res: unknown) => this.responseHandler(res, context)),
       catchError((err: unknown) => throwError(() => this.errorHandler(err, context)))
     );
   }
@@ -25,7 +25,7 @@ export class ResponseInterceptor implements NestInterceptor {
     const req = context.switchToHttp().getRequest();
     if (exception instanceof HttpException) return exception;
     this.logger.error(
-      `Error processing request for ${req.method} ${req.url}, Message: ${exception['message']}, Stack: ${exception['stack']}`
+      `Error processing request for ${req.method} ${req.url}, Message: ${(exception as any)?.message ?? String(exception)}, Stack: ${(exception as any)?.stack ?? ''}`
     );
     return new InternalServerErrorException({
       status_code: HttpStatus.INTERNAL_SERVER_ERROR,
@@ -33,15 +33,17 @@ export class ResponseInterceptor implements NestInterceptor {
     });
   }
 
-  responseHandler(res: any, context: ExecutionContext) {
+  responseHandler(res: unknown, context: ExecutionContext) {
     const ctx = context.switchToHttp();
     const response = ctx.getResponse();
     const status_code = response.statusCode;
 
     response.setHeader('Content-Type', 'application/json');
-    if (typeof res === 'object') {
-      const { message, ...data } = res;
-      console.log('response', res);
+    if (typeof res === 'object' && res !== null) {
+      const obj = res as Record<string, unknown>;
+      const message = (obj['message'] as string) ?? undefined;
+      const data: Record<string, unknown> = { ...obj };
+      delete data['message'];
 
       return {
         status_code,

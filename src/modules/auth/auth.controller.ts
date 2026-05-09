@@ -1,12 +1,14 @@
-import { Body, Controller, HttpCode, HttpStatus, Post, Req } from '@nestjs/common';
+import { Body, Controller, HttpCode, HttpStatus, Post, Req, Get, UseGuards, Res } from '@nestjs/common';
+import { AuthGuard } from '@nestjs/passport';
 import { ApiBearerAuth, ApiBody, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
-import { Request } from 'express';
+import { Request, Response } from 'express';
 import * as SYS_MSG from '@shared/constants/SystemMessages';
 import { skipAuth } from '@shared/helpers/skipAuth';
 import AuthenticationService from './auth.service';
 import { CreateUserDTO } from './dto/create-user.dto';
 import { LoginDto } from './dto/login.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
+import { GoogleOAuthProfile, OAuthLoginResponse } from './dto/google-oauth.dto';
 
 @ApiTags('Authentication')
 @Controller('auth')
@@ -33,6 +35,47 @@ export default class RegistrationController {
   @ApiResponse({ status: HttpStatus.UNAUTHORIZED, description: SYS_MSG.INVALID_CREDENTIALS })
   async login(@Body() loginDto: LoginDto) {
     return this.authService.loginUser(loginDto);
+  }
+
+  @skipAuth()
+  @Get('google')
+  @UseGuards(AuthGuard('google'))
+  @ApiOperation({ summary: 'Initiate Google OAuth login' })
+  @ApiResponse({ status: HttpStatus.FOUND, description: 'Redirects to Google consent screen' })
+  async googleAuth(): Promise<void> {
+    // Passport handles the redirect to Google
+  }
+
+  @skipAuth()
+  @Get('google/callback')
+  @UseGuards(AuthGuard('google'))
+  @ApiOperation({ summary: 'Google OAuth callback handler' })
+  @ApiResponse({ status: HttpStatus.FOUND, description: 'Redirects to dashboard on success' })
+  @ApiResponse({ status: HttpStatus.INTERNAL_SERVER_ERROR, description: SYS_MSG.GOOGLE_OAUTH_FAILED })
+  async googleAuthRedirect(@Req() req: Request & { user?: GoogleOAuthProfile }, @Res() res: Response): Promise<void> {
+    const payload = req.user;
+
+    if (!payload) {
+      res.status(HttpStatus.UNAUTHORIZED).json({
+        status_code: HttpStatus.UNAUTHORIZED,
+        message: SYS_MSG.GOOGLE_OAUTH_FAILED,
+      });
+
+      return;
+    }
+
+    try {
+      const result: OAuthLoginResponse = await this.authService.handleOAuthLogin(payload);
+      const redirectUrl = `/dashboard?access_token=${encodeURIComponent(result.access_token)}`;
+
+      res.redirect(HttpStatus.FOUND, redirectUrl);
+    } catch (err: unknown) {
+      const error = err as { status?: number; message?: string };
+      res.status(error?.status || HttpStatus.INTERNAL_SERVER_ERROR).json({
+        status_code: error?.status || HttpStatus.INTERNAL_SERVER_ERROR,
+        message: error?.message || SYS_MSG.GOOGLE_OAUTH_FAILED,
+      });
+    }
   }
 
   @ApiBearerAuth()
