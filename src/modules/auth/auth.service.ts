@@ -8,6 +8,11 @@ import { CustomHttpException } from '@shared/helpers/custom-http-filter';
 import { User } from '@modules/user/entities/user.entity';
 import { CreateUserDTO } from './dto/create-user.dto';
 import { LoginDto } from './dto/login.dto';
+import { UserSession } from './entities/user-session.entity';
+import { GoogleOAuthProfile, OAuthLoginResponse } from './dto/google-oauth.dto';
+import { v4 as uuidv4 } from 'uuid';
+import Redis from 'ioredis';
+import authConfig from '@config/auth.config';
 
 const OTP_LENGTH = 6;
 const OTP_EXPIRY_MINUTES = 10;
@@ -17,6 +22,8 @@ export default class AuthenticationService {
   constructor(
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
+    @InjectRepository(UserSession)
+    private readonly userSessionRepository: Repository<UserSession>,
     private readonly jwtService: JwtService
   ) {}
 
@@ -110,5 +117,111 @@ export default class AuthenticationService {
 
   private computeOtpExpiry(): Date {
     return new Date(Date.now() + OTP_EXPIRY_MINUTES * 60 * 1000);
+  }
+
+  async handleOAuthLogin(payload: GoogleOAuthProfile): Promise<OAuthLoginResponse> {
+    const email = payload.email.trim().toLowerCase();
+    if (!email) {
+      throw new CustomHttpException(SYS_MSG.GOOGLE_ACCOUNT_NO_EMAIL, HttpStatus.BAD_REQUEST);
+    }
+
+    const user = await this.userRepository.manager.transaction(async manager => {
+      const userRepo = manager.getRepository(User);
+      let currentUser = await userRepo.findOne({ where: { email } });
+
+      if (!currentUser) {
+        const newUser = userRepo.create({
+          email,
+          full_name: payload.full_name || email,
+          country: null,
+          password: null,
+          auth_provider: 'google',
+          provider_user_id: payload.providerId,
+          otp_code: this.generateOtp(),
+          expires_at: this.computeOtpExpiry(),
+          avatar_url: payload.avatar_url ?? null,
+          is_verified: true,
+        });
+
+        try {
+          currentUser = await userRepo.save(newUser);
+        } catch (err: unknown) {
+          const error = err as { code?: string };
+          if (error.code !== '23505') {
+            throw err;
+          }
+
+          currentUser = await userRepo.findOne({ where: { email } });
+          if (!currentUser) {
+            throw new CustomHttpException(SYS_MSG.USER_OAUTH_CREATION_FAILED, HttpStatus.INTERNAL_SERVER_ERROR);
+          }
+        }
+      }
+
+      if (currentUser.auth_provider === 'email') {
+        currentUser.auth_provider = 'google';
+        currentUser.provider_user_id = payload.providerId;
+      } else if (
+        currentUser.auth_provider === 'google' &&
+        currentUser.provider_user_id &&
+        currentUser.provider_user_id !== payload.providerId
+      ) {
+        throw new CustomHttpException(SYS_MSG.GOOGLE_ACCOUNT_LINK_CONFLICT, HttpStatus.CONFLICT);
+      } else if (!currentUser.provider_user_id) {
+        currentUser.auth_provider = 'google';
+        currentUser.provider_user_id = payload.providerId;
+      } else if (currentUser.auth_provider !== 'google') {
+        throw new CustomHttpException(SYS_MSG.GOOGLE_ACCOUNT_LINK_CONFLICT, HttpStatus.CONFLICT);
+      }
+
+      currentUser.full_name = payload.full_name || currentUser.full_name;
+      currentUser.avatar_url = payload.avatar_url ?? currentUser.avatar_url;
+      currentUser.is_verified = true;
+
+      return userRepo.save(currentUser);
+    });
+
+    const config = authConfig();
+    const refreshToken = uuidv4();
+    const refreshExpirySeconds = Number(config.jwtRefreshExpiry) || 60 * 60 * 24 * 30;
+    const session = this.userSessionRepository.create({
+      user_id: user.id,
+      refresh_token: refreshToken,
+      expires_at: new Date(Date.now() + refreshExpirySeconds * 1000),
+      is_revoked: false,
+    });
+
+    const savedSession = await this.userSessionRepository.save(session);
+
+    try {
+      const redisClient = new Redis({
+        host: config.redis.host,
+        port: +config.redis.port,
+        username: config.redis.username,
+        password: config.redis.password,
+      });
+      const key = `active_session:${user.id}:${savedSession.id}`;
+      await redisClient.set(key, refreshToken, 'EX', refreshExpirySeconds);
+      redisClient.disconnect();
+    } catch (err) {
+      // Redis failure should not block login; log in production
+    }
+
+    const access_token = this.jwtService.sign({ id: user.id, sub: user.id, email: user.email });
+
+    return {
+      status_code: HttpStatus.OK,
+      message: SYS_MSG.OAUTH_LOGIN_SUCCESSFUL,
+      access_token,
+      refresh_token: refreshToken,
+      data: {
+        user: {
+          id: user.id,
+          full_name: user.full_name,
+          email: user.email,
+          avatar_url: user.avatar_url,
+        },
+      },
+    };
   }
 }

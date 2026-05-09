@@ -6,6 +6,7 @@ import authConfig from '@config/auth.config';
 import { User } from '@modules/user/entities/user.entity';
 import RegistrationController from './auth.controller';
 import AuthenticationService from './auth.service';
+import { GoogleStrategy } from '../strategies/google.strategy';
 import { AuthMetadata } from './entities/auth-metadata.entity';
 import { UserSession } from './entities/user-session.entity';
 import type { StringValue } from 'ms';
@@ -13,7 +14,7 @@ import type { StringValue } from 'ms';
 const expiry = authConfig().jwtExpiry;
 @Module({
   controllers: [RegistrationController],
-  providers: [AuthenticationService],
+  providers: [AuthenticationService, GoogleStrategy],
   imports: [
     TypeOrmModule.forFeature([User, AuthMetadata, UserSession]),
     PassportModule,

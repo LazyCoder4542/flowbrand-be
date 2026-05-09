@@ -116,7 +116,6 @@ export const TOPIC_NOT_FOUND = `Help center topic with ID not found`;
 export const TOPIC_UPDATE_SUCCESS = 'Topic updated successfully';
 export const TOPIC_DELETED = 'Topic deleted successfully';
 export const BILLING_PLAN_NOT_FOUND = 'Billing plan not found';
-
 export const REDIS_MESSAGES = {
   CONNECT_SUCCESS: 'Redis connection established',
   CLIENT_READY: 'Redis client ready',
@@ -130,3 +129,8 @@ export const REDIS_MESSAGES = {
   PATTERN_DELETE_SUCCESS: (count: number, pattern: string) =>
     `delByPattern: deleted ${count} keys matching [${pattern}]`,
 };
+export const GOOGLE_ACCOUNT_NO_EMAIL = 'Google account has no email';
+export const GOOGLE_ACCOUNT_LINK_CONFLICT = 'Google account is linked to a different auth provider';
+export const GOOGLE_OAUTH_FAILED = 'Google OAuth authentication failed';
+export const USER_OAUTH_CREATION_FAILED = 'Failed to create user account';
+export const OAUTH_LOGIN_SUCCESSFUL = 'OAuth login successful';
