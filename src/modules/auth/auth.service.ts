@@ -18,11 +18,18 @@ export default class AuthenticationService {
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
     private readonly jwtService: JwtService
-  ) {}
+  ) { }
 
   async createNewUser(createUserDto: CreateUserDTO) {
+    if (!createUserDto.terms_accepted) {
+      throw new CustomHttpException(SYS_MSG.TERMS_AND_CONDITIONS, HttpStatus.BAD_REQUEST);
+    }
+
     const existing = await this.userRepository.findOne({ where: { email: createUserDto.email } });
     if (existing) {
+      if (!existing.is_active) {
+        throw new CustomHttpException(SYS_MSG.USER_ACCOUNT_LOCKED, HttpStatus.LOCKED)
+      }
       throw new CustomHttpException(SYS_MSG.USER_ACCOUNT_EXIST, HttpStatus.BAD_REQUEST);
     }
 

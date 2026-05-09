@@ -4,6 +4,7 @@ export const FAILED_TO_CREATE_USER = 'Error Occured while creating user, kindly 
 export const ERROR_OCCURED = 'Error Occured Performing this request';
 export const USER_ACCOUNT_EXIST = 'Account with the specified email exists';
 export const USER_ACCOUNT_DOES_NOT_EXIST = "Account with the specified email doesn't exist";
+export const USER_ACCOUNT_LOCKED = 'Account with the specified email is locked'
 export const UNAUTHENTICATED_MESSAGE = 'User is currently unauthorized, kindly authenticate to continue';
 export const TWO_FACTOR_VERIFIED_SUCCESSFULLY = '2FA verified and enabled';
 export const ANALYTICS_FETCHED_SUCCESSFULLY = 'Admin Analytics fetched successfully';
@@ -130,3 +131,4 @@ export const REDIS_MESSAGES = {
   PATTERN_DELETE_SUCCESS: (count: number, pattern: string) =>
     `delByPattern: deleted ${count} keys matching [${pattern}]`,
 };
+export const TERMS_AND_CONDITIONS = 'You must accept the terms and conditions to register'

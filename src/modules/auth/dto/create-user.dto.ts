@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsEmail, IsNotEmpty, IsOptional, IsString, IsStrongPassword, MaxLength, MinLength } from 'class-validator';
+import { IsBoolean, IsEmail, IsNotEmpty, IsOptional, IsString, IsStrongPassword, MaxLength, MinLength } from 'class-validator';
 
 export class CreateUserDTO {
   @ApiProperty({
@@ -43,4 +43,13 @@ export class CreateUserDTO {
     }
   )
   password: string;
+
+  @ApiProperty({
+    description: 'The user must accept the Terms and Conditions of the application to continue with signup',
+    example: true,
+    required: true
+  })
+  @IsBoolean()
+  @IsNotEmpty()
+  terms_accepted: boolean
 }
