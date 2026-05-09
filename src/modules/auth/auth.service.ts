@@ -8,6 +8,8 @@ import { CustomHttpException } from '@shared/helpers/custom-http-filter';
 import { User } from '@modules/user/entities/user.entity';
 import { CreateUserDTO } from './dto/create-user.dto';
 import { LoginDto } from './dto/login.dto';
+import { RedisService } from '@modules/redis/services/redis.service';
+import { randomInt } from 'crypto';
 
 const OTP_LENGTH = 6;
 const OTP_EXPIRY_MINUTES = 10;
@@ -17,7 +19,8 @@ export default class AuthenticationService {
   constructor(
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
-    private readonly jwtService: JwtService
+    private readonly jwtService: JwtService,
+    private readonly redisService: RedisService
   ) {}
 
   async createNewUser(createUserDto: CreateUserDTO) {
@@ -102,10 +105,12 @@ export default class AuthenticationService {
     };
   }
 
-  private generateOtp(): string {
-    return Math.floor(Math.random() * 10 ** OTP_LENGTH)
-      .toString()
-      .padStart(OTP_LENGTH, '0');
+  private generateOtp(length: number = OTP_LENGTH): string {
+    if (!Number.isInteger(length) || length < 1 || length > 10) {
+      throw new RangeError('OTP length must be an integer between 1 and 10');
+    }
+    const max = 10 ** length;
+    return randomInt(0, max).toString().padStart(length, '0');
   }
 
   private computeOtpExpiry(): Date {

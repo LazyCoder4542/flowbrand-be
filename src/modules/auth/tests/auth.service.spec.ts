@@ -8,6 +8,7 @@ import * as SYS_MSG from '@shared/constants/SystemMessages';
 import { CustomHttpException } from '@shared/helpers/custom-http-filter';
 import { User } from '@modules/user/entities/user.entity';
 import AuthenticationService from '../auth.service';
+import { RedisService } from '@modules/redis/services/redis.service';
 
 describe('AuthenticationService', () => {
   let service: AuthenticationService;
@@ -19,6 +20,14 @@ describe('AuthenticationService', () => {
   const jwtServiceMock = {
     sign: jest.fn(),
   };
+  const redisServiceMock = {
+    get: jest.fn(),
+    set: jest.fn(),
+    del: jest.fn(),
+    exists: jest.fn(),
+    incr: jest.fn(),
+    delByPattern: jest.fn(),
+  };
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
@@ -26,6 +35,7 @@ describe('AuthenticationService', () => {
         AuthenticationService,
         { provide: getRepositoryToken(User), useValue: userRepositoryMock },
         { provide: JwtService, useValue: jwtServiceMock },
+        { provide: RedisService, useValue: redisServiceMock },
       ],
     }).compile();
 
@@ -115,9 +125,9 @@ describe('AuthenticationService', () => {
         avatar_url: null,
         password: hashed,
       });
-      await expect(
-        service.loginUser({ email: 'jane@example.com', password: 'wrong-password' })
-      ).rejects.toThrow(CustomHttpException);
+      await expect(service.loginUser({ email: 'jane@example.com', password: 'wrong-password' })).rejects.toThrow(
+        CustomHttpException
+      );
     });
 
     it('rejects accounts without a stored password (OAuth-only)', async () => {
