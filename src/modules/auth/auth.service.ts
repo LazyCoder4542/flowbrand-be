@@ -8,6 +8,7 @@ import { CustomHttpException } from '@shared/helpers/custom-http-filter';
 import { User } from '@modules/user/entities/user.entity';
 import { CreateUserDTO } from './dto/create-user.dto';
 import { LoginDto } from './dto/login.dto';
+import { UserSession } from './entities/user-session.entity';
 
 const OTP_LENGTH = 6;
 const OTP_EXPIRY_MINUTES = 10;
@@ -17,8 +18,12 @@ export default class AuthenticationService {
   constructor(
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
+
+    @InjectRepository(UserSession)
+    private readonly userSessionRepository: Repository<UserSession>,
+
     private readonly jwtService: JwtService
-  ) { }
+  ) {}
 
   async createNewUser(createUserDto: CreateUserDTO) {
     if (!createUserDto.terms_accepted) {
@@ -28,7 +33,7 @@ export default class AuthenticationService {
     const existing = await this.userRepository.findOne({ where: { email: createUserDto.email } });
     if (existing) {
       if (!existing.is_active) {
-        throw new CustomHttpException(SYS_MSG.USER_ACCOUNT_LOCKED, HttpStatus.LOCKED)
+        throw new CustomHttpException(SYS_MSG.USER_ACCOUNT_LOCKED, HttpStatus.LOCKED);
       }
       throw new CustomHttpException(SYS_MSG.USER_ACCOUNT_EXIST, HttpStatus.BAD_REQUEST);
     }

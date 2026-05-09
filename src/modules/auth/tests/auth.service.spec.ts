@@ -8,11 +8,16 @@ import * as SYS_MSG from '@shared/constants/SystemMessages';
 import { CustomHttpException } from '@shared/helpers/custom-http-filter';
 import { User } from '@modules/user/entities/user.entity';
 import AuthenticationService from '../auth.service';
+import { UserSession } from '../entities/user-session.entity';
 
 describe('AuthenticationService', () => {
   let service: AuthenticationService;
   const userRepositoryMock = {
     findOne: jest.fn(),
+    create: jest.fn(),
+    save: jest.fn(),
+  };
+  const userSessionRepositoryMock = {
     create: jest.fn(),
     save: jest.fn(),
   };
@@ -25,6 +30,7 @@ describe('AuthenticationService', () => {
       providers: [
         AuthenticationService,
         { provide: getRepositoryToken(User), useValue: userRepositoryMock },
+        { provide: getRepositoryToken(UserSession), useValue: userSessionRepositoryMock },
         { provide: JwtService, useValue: jwtServiceMock },
       ],
     }).compile();
@@ -46,6 +52,7 @@ describe('AuthenticationService', () => {
       full_name: 'Jane Doe',
       password: 'P@ssword123',
       country: 'Nigeria',
+      terms_accepted: true,
     };
 
     it('creates a user when none exists with that email', async () => {
@@ -115,9 +122,9 @@ describe('AuthenticationService', () => {
         avatar_url: null,
         password: hashed,
       });
-      await expect(
-        service.loginUser({ email: 'jane@example.com', password: 'wrong-password' })
-      ).rejects.toThrow(CustomHttpException);
+      await expect(service.loginUser({ email: 'jane@example.com', password: 'wrong-password' })).rejects.toThrow(
+        CustomHttpException
+      );
     });
 
     it('rejects accounts without a stored password (OAuth-only)', async () => {
