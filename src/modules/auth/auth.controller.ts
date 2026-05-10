@@ -66,9 +66,12 @@ export default class RegistrationController {
 
     try {
       const result: OAuthLoginResponse = await this.authService.handleOAuthLogin(payload);
-      const redirectUrl = `/dashboard?access_token=${encodeURIComponent(result.access_token)}`;
-
-      res.redirect(HttpStatus.FOUND, redirectUrl);
+      res.cookie('access_token', result.access_token, {
+        httpOnly: true,
+        secure: true,
+        sameSite: 'lax',
+      });
+      res.redirect(HttpStatus.FOUND, '/dashboard');
     } catch (err: unknown) {
       const error = err as { status?: number; message?: string };
       res.status(error?.status || HttpStatus.INTERNAL_SERVER_ERROR).json({

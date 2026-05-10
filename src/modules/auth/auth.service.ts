@@ -3,6 +3,7 @@ import { JwtService } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import * as bcrypt from 'bcrypt';
+import * as crypto from 'crypto';
 import * as SYS_MSG from '@shared/constants/SystemMessages';
 import { CustomHttpException } from '@shared/helpers/custom-http-filter';
 import { User } from '@modules/user/entities/user.entity';
@@ -11,7 +12,7 @@ import { LoginDto } from './dto/login.dto';
 import { UserSession } from './entities/user-session.entity';
 import { GoogleOAuthProfile, OAuthLoginResponse } from './dto/google-oauth.dto';
 import { v4 as uuidv4 } from 'uuid';
-import Redis from 'ioredis';
+import { RedisService } from '@modules/redis/services/redis.service';
 import authConfig from '@config/auth.config';
 
 const OTP_LENGTH = 6;
@@ -19,23 +20,47 @@ const OTP_EXPIRY_MINUTES = 10;
 
 @Injectable()
 export default class AuthenticationService {
+  /**
+   * TODO: Migration Plan - Email Case-Insensitive Uniqueness
+   *
+   * Currently, email normalization (.trim().toLowerCase()) is performed at the application level
+   * in createNewUser(), loginUser(), and handleOAuthLogin(). This is a workaround.
+   *
+   * Recommended next step: Migrate the email column to PostgreSQL citext type to enforce
+   * case-insensitive uniqueness at the database level. This will:
+   * - Eliminate the need for application-level normalization
+   * - Prevent race conditions during user lookup/creation
+   * - Improve query performance for email-based searches
+   *
+   * Migration steps:
+   * 1. Create a migration: ALTER TABLE "user" ALTER COLUMN "email" TYPE citext;
+   * 2. Add unique constraint on citext column if not already present
+   * 3. Remove application-level normalization (optional; keeping it adds defense-in-depth)
+   * 4. Test thoroughly with both uppercase and lowercase email variants
+   */
   constructor(
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
     @InjectRepository(UserSession)
     private readonly userSessionRepository: Repository<UserSession>,
-    private readonly jwtService: JwtService
+    private readonly jwtService: JwtService,
+    private readonly redisService: RedisService
   ) {}
 
   async createNewUser(createUserDto: CreateUserDTO) {
-    const existing = await this.userRepository.findOne({ where: { email: createUserDto.email } });
+    // Normalize email: trim whitespace and convert to lowercase
+    // NOTE: This is a workaround until the email column is migrated to PostgreSQL citext
+    // for case-insensitive uniqueness enforcement at the database level.
+    const email = createUserDto.email.trim().toLowerCase();
+
+    const existing = await this.userRepository.findOne({ where: { email } });
     if (existing) {
       throw new CustomHttpException(SYS_MSG.USER_ACCOUNT_EXIST, HttpStatus.BAD_REQUEST);
     }
 
     const hashedPassword = await bcrypt.hash(createUserDto.password, 10);
     const user = this.userRepository.create({
-      email: createUserDto.email,
+      email,
       full_name: createUserDto.full_name,
       country: createUserDto.country ?? null,
       password: hashedPassword,
@@ -63,7 +88,11 @@ export default class AuthenticationService {
   }
 
   async loginUser(loginDto: LoginDto) {
-    const user = await this.userRepository.findOne({ where: { email: loginDto.email } });
+    // Normalize email: trim whitespace and convert to lowercase
+    // Matches normalization performed during user creation and OAuth login
+    const email = loginDto.email.trim().toLowerCase();
+
+    const user = await this.userRepository.findOne({ where: { email } });
     if (!user || !user.password) {
       throw new CustomHttpException(SYS_MSG.INVALID_CREDENTIALS, HttpStatus.UNAUTHORIZED);
     }
@@ -117,6 +146,33 @@ export default class AuthenticationService {
 
   private computeOtpExpiry(): Date {
     return new Date(Date.now() + OTP_EXPIRY_MINUTES * 60 * 1000);
+  }
+
+  /**
+   * Hash a refresh token using HMAC-SHA256 for secure persistence.
+   * @param token - The plaintext refresh token
+   * @returns HMAC-SHA256 hash as hex string
+   */
+  private hashRefreshToken(token: string): string {
+    const config = authConfig();
+    const secret = config.jwtRefreshSecret || 'default-refresh-secret';
+    return crypto.createHmac('sha256', secret).update(token).digest('hex');
+  }
+
+  /**
+   * Verify a refresh token against its stored hash using constant-time comparison.
+   * @param token - The plaintext refresh token from the client
+   * @param hash - The stored hash from DB/Redis
+   * @returns true if token matches hash, false otherwise
+   *
+   * Usage in refresh/revoke endpoints:
+   *   const session = await userSessionRepository.findOne({ where: { id: sessionId } });
+   *   const isValid = this.verifyRefreshToken(incomingRefreshToken, session.refresh_token);
+   *   if (!isValid) throw new UnauthorizedException('Invalid refresh token');
+   */
+  private verifyRefreshToken(token: string, hash: string): boolean {
+    const computed = this.hashRefreshToken(token);
+    return crypto.timingSafeEqual(Buffer.from(computed), Buffer.from(hash));
   }
 
   async handleOAuthLogin(payload: GoogleOAuthProfile): Promise<OAuthLoginResponse> {
@@ -183,29 +239,21 @@ export default class AuthenticationService {
 
     const config = authConfig();
     const refreshToken = uuidv4();
+    const refreshTokenHash = this.hashRefreshToken(refreshToken);
     const refreshExpirySeconds = Number(config.jwtRefreshExpiry) || 60 * 60 * 24 * 30;
     const session = this.userSessionRepository.create({
       user_id: user.id,
-      refresh_token: refreshToken,
+      refresh_token: refreshTokenHash,
       expires_at: new Date(Date.now() + refreshExpirySeconds * 1000),
       is_revoked: false,
     });
 
     const savedSession = await this.userSessionRepository.save(session);
 
-    try {
-      const redisClient = new Redis({
-        host: config.redis.host,
-        port: +config.redis.port,
-        username: config.redis.username,
-        password: config.redis.password,
-      });
-      const key = `active_session:${user.id}:${savedSession.id}`;
-      await redisClient.set(key, refreshToken, 'EX', refreshExpirySeconds);
-      redisClient.disconnect();
-    } catch (err) {
-      // Redis failure should not block login; log in production
-    }
+    // Store refresh token hash in Redis using shared RedisService
+    // Redis failure should not block login; RedisService handles errors gracefully
+    const key = `active_session:${user.id}:${savedSession.id}`;
+    await this.redisService.set(key, refreshTokenHash, refreshExpirySeconds);
 
     const access_token = this.jwtService.sign({ id: user.id, sub: user.id, email: user.email });
 
