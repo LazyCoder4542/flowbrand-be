@@ -34,6 +34,7 @@ export const EMAIL_SENT = 'Email sent successfully';
 export const ENABLE_2FA_ERROR = 'Error occured enabling 2fa';
 export const ALREADY_ENABLED_2FA = '2FA already enabled on your account';
 export const SIGN_IN_OTP_SENT = 'Sign-in token sent to email';
+export const FORGOT_PASSWORD_OTP_SENT = 'Forgot password token sent to email';
 export const WRONG_PARAMETERS =
   'permission_list must be an object with keys from PermissionCategory and boolean values';
 export const INVALID_ADMIN_SECRET = 'Invalid access secret';

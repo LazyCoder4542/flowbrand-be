@@ -6,6 +6,7 @@ import * as bcrypt from 'bcrypt';
 import * as SYS_MSG from '@shared/constants/SystemMessages';
 import { CustomHttpException } from '@shared/helpers/custom-http-filter';
 import { User } from '@modules/user/entities/user.entity';
+import { UserSession } from './entities/user-session.entity';
 import { CreateUserDTO } from './dto/create-user.dto';
 import { LoginDto } from './dto/login.dto';
 import { RedisService } from '@modules/redis/services/redis.service';
@@ -19,6 +20,8 @@ export default class AuthenticationService {
   constructor(
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
+    @InjectRepository(UserSession)
+    private readonly userSessionRepository: Repository<UserSession>,
     private readonly jwtService: JwtService,
     private readonly redisService: RedisService
   ) {}
@@ -29,7 +32,7 @@ export default class AuthenticationService {
       throw new CustomHttpException(SYS_MSG.USER_ACCOUNT_EXIST, HttpStatus.BAD_REQUEST);
     }
 
-    const hashedPassword = await bcrypt.hash(createUserDto.password, 10);
+    const hashedPassword = await this.hashPassword(createUserDto.password);
     const user = this.userRepository.create({
       email: createUserDto.email,
       full_name: createUserDto.full_name,
@@ -96,13 +99,59 @@ export default class AuthenticationService {
       throw new CustomHttpException(SYS_MSG.INVALID_PASSWORD, HttpStatus.BAD_REQUEST);
     }
 
-    user.password = await bcrypt.hash(newPassword, 10);
+    user.password = await this.hashPassword(newPassword);
     await this.userRepository.save(user);
 
     return {
       status_code: HttpStatus.OK,
       message: SYS_MSG.PASSWORD_UPDATED,
     };
+  }
+
+  async forgotPassword(email: string) {
+    const user = await this.userRepository.findOne({ where: { email } });
+    if (user) {
+      const otp = this.generateOtp();
+      const key = `$reset_otp:${email}`;
+      await this.redisService.set(key, otp, 300);
+      // TODO: send otp to mail
+    }
+    return {
+      status_code: HttpStatus.OK,
+      message: SYS_MSG.FORGOT_PASSWORD_OTP_SENT,
+    };
+  }
+
+  async resetPassword(email: string, otp: string, newPassword: string) {
+    const key = `$reset_otp:${email}`;
+    const storedOtp = await this.redisService.get(key);
+    if (otp !== storedOtp) {
+      throw new CustomHttpException(SYS_MSG.INCORRECT_TOTP_CODE, HttpStatus.BAD_REQUEST);
+    }
+
+    const user = await this.userRepository.findOne({ where: { email } });
+    if (!user) {
+      throw new CustomHttpException(SYS_MSG.USER_NOT_FOUND, HttpStatus.NOT_FOUND);
+    }
+
+    user.password = await this.hashPassword(newPassword);
+    await this.userRepository.save(user);
+
+    await this.redisService.del(key);
+    await this.redisService.delByPattern(`active_session:${user.id}:*`);
+    await this.userSessionRepository.update(
+      { user_id: user.id, is_revoked: false },
+      { is_revoked: true, revoked_at: new Date() }
+    );
+
+    return {
+      status_code: HttpStatus.OK,
+      message: SYS_MSG.PASSWORD_UPDATED,
+    };
+  }
+
+  private async hashPassword(password: string): Promise<string> {
+    return bcrypt.hash(password, 10);
   }
 
   private generateOtp(length: number = OTP_LENGTH): string {
