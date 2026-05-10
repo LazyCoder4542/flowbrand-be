@@ -117,7 +117,11 @@ describe('EmailService', () => {
 
     const result = await queueService.sendMail(mailSender);
 
-    expect(mockQueue.add).toHaveBeenCalledWith(mailSender.variant, { mail: mailSender.mail });
+    expect(mockQueue.add).toHaveBeenCalledWith(
+      mailSender.variant,
+      { mail: mailSender.mail },
+      { attempts: 3, backoff: { type: 'exponential', delay: 5000 } }
+    );
     expect(result).toEqual({ jobId: jobMock.id });
   });
 
@@ -327,7 +331,11 @@ describe('EmailService', () => {
 
     const result = await queueService.sendMail(mailSender);
 
-    expect(mockQueue.add).toHaveBeenCalledWith(mailSender.variant, { mail: mailSender.mail });
+    expect(mockQueue.add).toHaveBeenCalledWith(
+      mailSender.variant,
+      { mail: mailSender.mail },
+      { attempts: 3, backoff: { type: 'exponential', delay: 5000 } }
+    );
     expect(result).toEqual({ jobId: jobMock.id });
   });
 });

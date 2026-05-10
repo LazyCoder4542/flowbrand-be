@@ -3,7 +3,7 @@ import { Queue } from 'bull';
 import { MailInterface } from './interfaces/MailInterface';
 import { Injectable } from '@nestjs/common';
 
-Injectable();
+@Injectable()
 export default class QueueService {
   constructor(
     @InjectQueue('emailSending')
@@ -11,7 +11,11 @@ export default class QueueService {
   ) {}
 
   async sendMail({ variant, mail }: MailSender) {
-    const mailJob = await this.emailQueue.add(variant, { mail });
+    const mailJob = await this.emailQueue.add(
+      variant,
+      { mail },
+      { attempts: 3, backoff: { type: 'exponential', delay: 5000 } }
+    );
     return { jobId: mailJob.id };
   }
 }
