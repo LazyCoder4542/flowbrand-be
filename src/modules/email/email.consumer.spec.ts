@@ -56,7 +56,7 @@ describe('EmailQueueConsumer', () => {
       template: 'Welcome-Template',
     });
 
-    expect(loggerSpy).toHaveBeenCalledWith('Welcome email sent successfully to test@example.com');
+    expect(loggerSpy).toHaveBeenCalledWith('Welcome email sent successfully to t**t@example.com');
   });
 
   it('should send a waitlist email and log success', async () => {
@@ -71,7 +71,7 @@ describe('EmailQueueConsumer', () => {
       template: 'waitlist',
     });
 
-    expect(loggerSpy).toHaveBeenCalledWith('Waitlist email sent successfully to test@example.com');
+    expect(loggerSpy).toHaveBeenCalledWith('Waitlist email sent successfully to t**t@example.com');
   });
 
   it('should throw errors in sendWelcomeEmailJob so Bull can retry', async () => {
@@ -86,7 +86,7 @@ describe('EmailQueueConsumer', () => {
       expect.objectContaining({
         message: 'sendWelcomeEmailJob failed',
         jobId: 1,
-        recipient: 'test@example.com',
+        recipient: 't**t@example.com',
       })
     );
   });
@@ -121,7 +121,7 @@ describe('EmailQueueConsumer', () => {
       })
     );
 
-    expect(loggerSpy).toHaveBeenCalledWith('Reset password email sent successfully to test@example.com');
+    expect(loggerSpy).toHaveBeenCalledWith('Reset password email sent successfully to t**t@example.com');
   });
 
   it('should send a newsletter email and log success', async () => {
@@ -136,7 +136,7 @@ describe('EmailQueueConsumer', () => {
       template: 'newsletter',
     });
 
-    expect(loggerSpy).toHaveBeenCalledWith('Newsletter email sent successfully to test@example.com');
+    expect(loggerSpy).toHaveBeenCalledWith('Newsletter email sent successfully to t**t@example.com');
   });
 
   it('should send a register OTP email and log success', async () => {
@@ -151,7 +151,7 @@ describe('EmailQueueConsumer', () => {
       template: 'register-otp',
     });
 
-    expect(loggerSpy).toHaveBeenCalledWith('Register OTP email sent successfully to test@example.com');
+    expect(loggerSpy).toHaveBeenCalledWith('Register OTP email sent successfully to t**t@example.com');
   });
 
   it('should send a login OTP email and log success', async () => {
@@ -166,7 +166,7 @@ describe('EmailQueueConsumer', () => {
       template: 'login-otp',
     });
 
-    expect(loggerSpy).toHaveBeenCalledWith('Login OTP email sent successfully to test@example.com');
+    expect(loggerSpy).toHaveBeenCalledWith('Login OTP email sent successfully to t**t@example.com');
   });
 
   it('should send an in-app notification email and log success', async () => {
@@ -181,6 +181,6 @@ describe('EmailQueueConsumer', () => {
       template: 'login-otp',
     });
 
-    expect(loggerSpy).toHaveBeenCalledWith('Notification email sent successfully to test@example.com');
+    expect(loggerSpy).toHaveBeenCalledWith('Notification email sent successfully to t**t@example.com');
   });
 });
