@@ -225,17 +225,29 @@ describe('AuthenticationService', () => {
       );
     });
 
-    it('throws for an invalid or expired OTP without leaking whether the email exists', async () => {
+    it('throws for an invalid or expired OTP', async () => {
       redisServiceMock.get.mockResolvedValueOnce(null);
+      userRepositoryMock.findOne.mockResolvedValueOnce({ id: 'user-1', email });
 
       await expect(service.resetPassword(email, 'wrong', 'NewP@ss123')).rejects.toThrow(CustomHttpException);
-      expect(userRepositoryMock.findOne).not.toHaveBeenCalled();
+      expect(userRepositoryMock.save).not.toHaveBeenCalled();
     });
 
     it('throws for an OTP mismatch', async () => {
       redisServiceMock.get.mockResolvedValueOnce('654321');
+      userRepositoryMock.findOne.mockResolvedValueOnce({ id: 'user-1', email });
 
       await expect(service.resetPassword(email, otp, 'NewP@ss123')).rejects.toThrow(CustomHttpException);
+      expect(userRepositoryMock.save).not.toHaveBeenCalled();
+    });
+
+    it('deletes the OTP key and throws when OTP is valid but user no longer exists', async () => {
+      redisServiceMock.get.mockResolvedValueOnce(otp);
+      userRepositoryMock.findOne.mockResolvedValueOnce(null);
+
+      await expect(service.resetPassword(email, otp, 'NewP@ss123')).rejects.toThrow(CustomHttpException);
+      expect(redisServiceMock.del).toHaveBeenCalledWith(key);
+      expect(userRepositoryMock.save).not.toHaveBeenCalled();
     });
   });
 });

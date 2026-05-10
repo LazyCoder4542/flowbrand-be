@@ -125,13 +125,15 @@ export default class AuthenticationService {
   async resetPassword(email: string, otp: string, newPassword: string) {
     const key = `$reset_otp:${email}`;
     const storedOtp = await this.redisService.get(key);
+    const user = await this.userRepository.findOne({ where: { email } });
+
     if (otp !== storedOtp) {
       throw new CustomHttpException(SYS_MSG.INCORRECT_TOTP_CODE, HttpStatus.BAD_REQUEST);
     }
 
-    const user = await this.userRepository.findOne({ where: { email } });
     if (!user) {
-      throw new CustomHttpException(SYS_MSG.USER_NOT_FOUND, HttpStatus.NOT_FOUND);
+      await this.redisService.del(key);
+      throw new CustomHttpException(SYS_MSG.INCORRECT_TOTP_CODE, HttpStatus.BAD_REQUEST);
     }
 
     user.password = await this.hashPassword(newPassword);
