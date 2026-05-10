@@ -34,7 +34,7 @@ export default class AuthenticationService {
     private readonly jwtService: JwtService,
     private readonly redisService: RedisService,
     private readonly dataSource: DataSource
-  ) {}
+  ) { }
 
   async createNewUser(createUserDto: CreateUserDTO, response: Response) {
     if (!createUserDto.terms_accepted) {
@@ -94,6 +94,7 @@ export default class AuthenticationService {
       await queryRunner.commitTransaction();
     } catch (error) {
       await queryRunner.rollbackTransaction();
+
       const err = error as Error;
       this.logger.error(`Registration failed: ${err.message}`, err.stack);
 

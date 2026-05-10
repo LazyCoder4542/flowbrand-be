@@ -12,6 +12,7 @@ import { UserSession } from '../entities/user-session.entity';
 import { DataSource } from 'typeorm';
 import { AuthMetadata } from '../entities/auth-metadata.entity';
 import { RedisService } from '@modules/redis/services/redis.service';
+import { Response } from 'express';
 
 describe('AuthenticationService', () => {
   let service: AuthenticationService;
@@ -99,7 +100,7 @@ describe('AuthenticationService', () => {
       });
       jwtServiceMock.sign.mockReturnValueOnce('jwt');
 
-      const result = await service.createNewUser(dto, responseMock as any);
+      const result = await service.createNewUser(dto, responseMock as unknown as Response);
 
       expect(result.status_code).toBe(HttpStatus.CREATED);
       expect(result.message).toBe(SYS_MSG.USER_CREATED_SUCCESSFULLY);
@@ -110,11 +111,22 @@ describe('AuthenticationService', () => {
         email: dto.email,
         avatar_url: null,
       });
+      expect(responseMock.cookie).toHaveBeenCalledWith(
+        'refresh_token',
+        expect.any(String),
+        expect.objectContaining({
+          httpOnly: true,
+          sameSite: 'strict',
+          maxAge: 7 * 24 * 60 * 60 * 1000,
+        })
+      );
     });
 
     it('throws when a user with that email already exists', async () => {
       userRepositoryMock.findOne.mockResolvedValueOnce({ id: 'existing' });
-      await expect(service.createNewUser(dto, responseMock as any)).rejects.toThrow(CustomHttpException);
+      await expect(service.createNewUser(dto, responseMock as unknown as Response)).rejects.toThrow(
+        CustomHttpException
+      );
     });
   });
 
