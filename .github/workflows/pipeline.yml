@@ -1,0 +1,159 @@
+name: Pipeline
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  TRIGGER STRATEGY
+#
+#  dev      → push to dev branch (fast feedback, ship often)
+#  staging  → semver pre-release tag  (e.g. v1.2.0-rc.1)
+#             gives QA a stable, named cut to test against
+#  prod     → semver release tag      (e.g. v1.2.0)
+#             nothing reaches prod without an explicit, auditable tag
+#
+#  All three also support workflow_dispatch so any environment can be
+#  triggered manually from the GitHub UI without needing a push or tag.
+#
+#  PR       → lint + build + test (no deploy). Keeps the main gate fast.
+# ══════════════════════════════════════════════════════════════════════════════
+
+on:
+  push:
+    branches:
+      - dev
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+-rc*' # staging:  v1.2.0-rc.1
+      - 'v[0-9]+.[0-9]+.[0-9]+' # prod:     v1.2.0
+
+  pull_request:
+    branches:
+      - dev
+      - staging
+      - main
+
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy'
+        required: true
+        type: choice
+        options: [dev, staging, prod]
+
+concurrency:
+  # One active pipeline at a time per ref.
+  # Cancels stale in-progress runs when a new push lands on the same branch/tag.
+  group: pipeline-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint-pr:
+    name: Lint (PR)
+    if: github.event_name == 'pull_request'
+    uses: ./.github/workflows/_lint.yml
+
+  build-pr:
+    name: Build (PR)
+    if: github.event_name == 'pull_request'
+    needs: lint-pr
+    uses: ./.github/workflows/_build.yml
+    with:
+      environment: dev
+
+  # ── Uncomment when the team has written tests ──────────────────────────────
+  # test-pr:
+  #   name: Test (PR)
+  #   if: github.event_name == 'pull_request'
+  #   needs: lint-pr
+  #   uses: ./.github/workflows/_test.yml
+
+  # ════════════════════════════════════════════════════════════════════════════
+  #  SHARED GATES — run for every non-PR push / tag / dispatch
+  # ════════════════════════════════════════════════════════════════════════════
+
+  lint:
+    name: Lint
+    if: github.event_name != 'pull_request'
+    uses: ./.github/workflows/_lint.yml
+
+  security:
+    name: Security
+    if: github.event_name != 'pull_request'
+    uses: ./.github/workflows/_security.yml
+
+  # ── Uncomment when the team has written tests ──────────────────────────────
+  # test:
+  #   name: Test
+  #   if: github.event_name != 'pull_request'
+  #   uses: ./.github/workflows/_test.yml
+
+  # ════════════════════════════════════════════════════════════════════════════
+  #  BUILD
+  #  Resolves which environment to target, then produces a versioned tarball
+  #  and uploads it as a GitHub Actions artifact for the deploy jobs to consume.
+  # ════════════════════════════════════════════════════════════════════════════
+
+  build:
+    name: Build
+    if: github.event_name != 'pull_request'
+    needs: [lint, security]
+    uses: ./.github/workflows/_build.yml
+    with:
+      environment: >-
+        ${{
+          github.event_name == 'workflow_dispatch' && inputs.environment ||
+          (startsWith(github.ref, 'refs/tags/') && contains(github.ref, '-rc') && 'staging') ||
+          (startsWith(github.ref, 'refs/tags/') && !contains(github.ref, '-rc') && 'prod') ||
+          'dev'
+        }}
+
+  deploy-dev:
+    name: Deploy → dev
+    if: |
+      github.event_name != 'pull_request' && (
+        (github.event_name == 'push'             && github.ref == 'refs/heads/dev') ||
+        (github.event_name == 'workflow_dispatch' && inputs.environment == 'dev')
+      )
+    needs: build
+    uses: ./.github/workflows/_deploy.yml
+    with:
+      environment: dev
+      artifact_name: ${{ needs.build.outputs.artifact_name }}
+      tarball: ${{ needs.build.outputs.tarball }}
+    secrets:
+      HOST: ${{ secrets.HOST }}
+      USERNAME: ${{ secrets.USERNAME }}
+      PASSWORD: ${{ secrets.PASSWORD }}
+
+  deploy-staging:
+    name: Deploy → staging
+    if: |
+      github.event_name != 'pull_request' && (
+        (github.event_name == 'push'             && startsWith(github.ref, 'refs/tags/') && contains(github.ref, '-rc')) ||
+        (github.event_name == 'workflow_dispatch' && inputs.environment == 'staging')
+      )
+    needs: build
+    uses: ./.github/workflows/_deploy.yml
+    with:
+      environment: staging
+      artifact_name: ${{ needs.build.outputs.artifact_name }}
+      tarball: ${{ needs.build.outputs.tarball }}
+    secrets:
+      HOST: ${{ secrets.HOST }}
+      USERNAME: ${{ secrets.USERNAME }}
+      PASSWORD: ${{ secrets.PASSWORD }}
+
+  deploy-prod:
+    name: Deploy → prod
+    if: |
+      github.event_name != 'pull_request' && (
+        (github.event_name == 'push'             && startsWith(github.ref, 'refs/tags/') && !contains(github.ref, '-rc')) ||
+        (github.event_name == 'workflow_dispatch' && inputs.environment == 'prod')
+      )
+    needs: build
+    uses: ./.github/workflows/_deploy.yml
+    with:
+      environment: prod
+      artifact_name: ${{ needs.build.outputs.artifact_name }}
+      tarball: ${{ needs.build.outputs.tarball }}
+    secrets:
+      HOST: ${{ secrets.HOST }}
+      USERNAME: ${{ secrets.USERNAME }}
+      PASSWORD: ${{ secrets.PASSWORD }}
