@@ -1,4 +1,4 @@
-import { HttpStatus, Injectable } from '@nestjs/common';
+import { HttpStatus, Injectable, Logger } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -11,19 +11,24 @@ import { CreateUserDTO } from './dto/create-user.dto';
 import { LoginDto } from './dto/login.dto';
 import { RedisService } from '@modules/redis/services/redis.service';
 import { randomInt } from 'crypto';
+import { EmailService } from '@modules/email/email.service';
+import { FRONTEND_RESET_PASSWORD } from '@shared/constants/app-constants';
 
 const OTP_LENGTH = 6;
 const OTP_EXPIRY_MINUTES = 10;
 
 @Injectable()
 export default class AuthenticationService {
+  private readonly logger = new Logger(AuthenticationService.name);
+
   constructor(
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
     @InjectRepository(UserSession)
     private readonly userSessionRepository: Repository<UserSession>,
     private readonly jwtService: JwtService,
-    private readonly redisService: RedisService
+    private readonly redisService: RedisService,
+    private readonly emailService: EmailService
   ) {}
 
   async createNewUser(createUserDto: CreateUserDTO) {
@@ -113,8 +118,17 @@ export default class AuthenticationService {
     if (user) {
       const otp = this.generateOtp();
       const key = `$reset_otp:${email}`;
-      await this.redisService.set(key, otp, 300);
-      // TODO: send otp to mail
+      try {
+        await this.redisService.set(key, otp, 300);
+        await this.emailService.sendForgotPasswordMail(
+          email,
+          user.full_name,
+          `${FRONTEND_RESET_PASSWORD}?email=${email}`,
+          otp
+        );
+      } catch (err) {
+        this.logger.error(`Failed to issue password reset OTP for ${email}`, (err as Error).message);
+      }
     }
     return {
       status_code: HttpStatus.OK,

@@ -9,6 +9,7 @@ import { CustomHttpException } from '@shared/helpers/custom-http-filter';
 import { User } from '@modules/user/entities/user.entity';
 import AuthenticationService from '../auth.service';
 import { RedisService } from '@modules/redis/services/redis.service';
+import { EmailService } from '@modules/email/email.service';
 import { UserSession } from '../entities/user-session.entity';
 
 describe('AuthenticationService', () => {
@@ -32,6 +33,9 @@ describe('AuthenticationService', () => {
     incr: jest.fn(),
     delByPattern: jest.fn(),
   };
+  const emailServiceMock = {
+    sendForgotPasswordMail: jest.fn(),
+  };
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
@@ -41,6 +45,7 @@ describe('AuthenticationService', () => {
         { provide: getRepositoryToken(UserSession), useValue: userSessionRepositoryMock },
         { provide: JwtService, useValue: jwtServiceMock },
         { provide: RedisService, useValue: redisServiceMock },
+        { provide: EmailService, useValue: emailServiceMock },
       ],
     }).compile();
 

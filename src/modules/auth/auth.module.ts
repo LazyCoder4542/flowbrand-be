@@ -9,11 +9,13 @@ import AuthenticationService from './auth.service';
 import { AuthMetadata } from './entities/auth-metadata.entity';
 import { UserSession } from './entities/user-session.entity';
 import type { StringValue } from 'ms';
+import { EmailModule } from '@modules/email/email.module';
+import { EmailService } from '@modules/email/email.service';
 
 const expiry = authConfig().jwtExpiry;
 @Module({
   controllers: [RegistrationController],
-  providers: [AuthenticationService],
+  providers: [AuthenticationService, EmailService],
   imports: [
     TypeOrmModule.forFeature([User, AuthMetadata, UserSession]),
     PassportModule,
@@ -24,6 +26,7 @@ const expiry = authConfig().jwtExpiry;
         expiresIn: `${expiry}` as unknown as StringValue,
       },
     }),
+    EmailModule,
   ],
   exports: [TypeOrmModule],
 })
