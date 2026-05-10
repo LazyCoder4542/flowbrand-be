@@ -16,7 +16,6 @@ const expiry = authConfig().jwtExpiry;
 @Module({
   controllers: [RegistrationController],
   providers: [AuthenticationService, GoogleStrategy],
-  providers: [AuthenticationService, LockoutService, SessionService],
   imports: [
     PassportModule,
     JwtModule.register({
