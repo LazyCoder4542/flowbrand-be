@@ -31,11 +31,11 @@ export class User extends AbstractBaseEntity {
   @Column({ type: 'text', nullable: true })
   provider_user_id: string | null;
 
-  @Column({ type: 'varchar', length: 6, nullable: false })
-  otp_code: string;
+  @Column({ type: 'varchar', length: 6, nullable: true })
+  otp_code: string | null;
 
-  @Column({ type: 'timestamp', nullable: false })
-  expires_at: Date;
+  @Column({ type: 'timestamp', nullable: true })
+  expires_at: Date | null;
 
   @Column({ type: 'boolean', nullable: false, default: false })
   terms_accepted: boolean;
