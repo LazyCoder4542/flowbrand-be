@@ -9,6 +9,7 @@ import { CustomHttpException } from '@shared/helpers/custom-http-filter';
 import { User } from '@modules/user/entities/user.entity';
 import AuthenticationService from '../auth.service';
 import { UserSession } from '../entities/user-session.entity';
+import { RedisService } from '@modules/redis/services/redis.service';
 
 describe('AuthenticationService', () => {
   let service: AuthenticationService;
@@ -16,6 +17,9 @@ describe('AuthenticationService', () => {
     findOne: jest.fn(),
     create: jest.fn(),
     save: jest.fn(),
+    manager: {
+      transaction: jest.fn(),
+    },
   };
   const jwtServiceMock = {
     sign: jest.fn(),
@@ -23,6 +27,11 @@ describe('AuthenticationService', () => {
   const userSessionRepositoryMock = {
     create: jest.fn(),
     save: jest.fn(),
+  };
+  const redisServiceMock = {
+    set: jest.fn(),
+    get: jest.fn(),
+    del: jest.fn(),
   };
 
   beforeEach(async () => {
@@ -32,6 +41,7 @@ describe('AuthenticationService', () => {
         { provide: getRepositoryToken(User), useValue: userRepositoryMock },
         { provide: getRepositoryToken(UserSession), useValue: userSessionRepositoryMock },
         { provide: JwtService, useValue: jwtServiceMock },
+        { provide: RedisService, useValue: redisServiceMock },
       ],
     }).compile();
 
@@ -161,6 +171,244 @@ describe('AuthenticationService', () => {
       const hashed = await bcrypt.hash('correct-old', 10);
       userRepositoryMock.findOne.mockResolvedValueOnce({ id: 'user-1', password: hashed });
       await expect(service.changePassword('user-1', 'wrong-old', 'new')).rejects.toThrow(CustomHttpException);
+    });
+  });
+
+  describe('handleOAuthLogin', () => {
+    const googleProfile = {
+      provider: 'google',
+      providerId: 'google-123',
+      email: 'user@example.com',
+      full_name: 'John Doe',
+      avatar_url: 'https://example.com/avatar.jpg',
+    };
+    beforeEach(() => {
+      // Setup manager.transaction to return the callback result
+      (userRepositoryMock.manager.transaction as jest.Mock).mockImplementation(callback =>
+        callback({
+          getRepository: jest.fn(() => ({
+            findOne: userRepositoryMock.findOne,
+            create: userRepositoryMock.create,
+            save: userRepositoryMock.save,
+          })),
+        })
+      );
+    });
+
+    it('creates a new user when email does not exist', async () => {
+      userRepositoryMock.findOne.mockResolvedValueOnce(null);
+      userRepositoryMock.create.mockImplementation(input => input);
+      userRepositoryMock.save.mockResolvedValueOnce({
+        id: 'new-user-1',
+        email: googleProfile.email,
+        full_name: googleProfile.full_name,
+        avatar_url: googleProfile.avatar_url,
+      });
+      userRepositoryMock.save.mockResolvedValueOnce({
+        id: 'new-user-1',
+        email: googleProfile.email,
+        full_name: googleProfile.full_name,
+        avatar_url: googleProfile.avatar_url,
+      });
+      userSessionRepositoryMock.create.mockImplementation(input => input);
+      userSessionRepositoryMock.save.mockResolvedValueOnce({
+        id: 'session-1',
+        user_id: 'new-user-1',
+        refresh_token: 'hashed-token',
+      });
+      jwtServiceMock.sign.mockReturnValueOnce('access-jwt');
+
+      const result = await service.handleOAuthLogin(googleProfile);
+
+      // Verify new user was created with OAuth data
+      const createdUser = userRepositoryMock.create.mock.calls[0][0];
+      expect(createdUser.email).toBe(googleProfile.email);
+      expect(createdUser.full_name).toBe(googleProfile.full_name);
+      expect(createdUser.avatar_url).toBe(googleProfile.avatar_url);
+      expect(createdUser.auth_provider).toBe('google');
+      expect(createdUser.provider_user_id).toBe(googleProfile.providerId);
+      expect(createdUser.password).toBeNull();
+
+      // Verify session was created
+      expect(userSessionRepositoryMock.create).toHaveBeenCalled();
+      expect(userSessionRepositoryMock.save).toHaveBeenCalled();
+
+      // Verify response
+      expect(result.status_code).toBe(HttpStatus.OK);
+      expect(result.access_token).toBe('access-jwt');
+      expect(result.refresh_token).toBeDefined();
+      expect(result.data.user.email).toBe(googleProfile.email);
+    });
+
+    it('links OAuth provider to existing email user', async () => {
+      const existingUser = {
+        id: 'existing-user-1',
+        email: googleProfile.email,
+        auth_provider: 'email',
+        provider_user_id: null,
+        full_name: 'John Old',
+        avatar_url: null,
+      };
+
+      userRepositoryMock.findOne.mockResolvedValueOnce(existingUser);
+      userRepositoryMock.save.mockResolvedValueOnce({
+        ...existingUser,
+        auth_provider: 'google',
+        provider_user_id: googleProfile.providerId,
+        full_name: googleProfile.full_name,
+        avatar_url: googleProfile.avatar_url,
+      });
+      userSessionRepositoryMock.create.mockImplementation(input => input);
+      userSessionRepositoryMock.save.mockResolvedValueOnce({
+        id: 'session-2',
+        user_id: 'existing-user-1',
+        refresh_token: 'hashed-token',
+      });
+      jwtServiceMock.sign.mockReturnValueOnce('access-jwt');
+
+      const result = await service.handleOAuthLogin(googleProfile);
+
+      // Verify provider was linked
+      const updatedUser = userRepositoryMock.save.mock.calls[0][0];
+      expect(updatedUser.auth_provider).toBe('google');
+      expect(updatedUser.provider_user_id).toBe(googleProfile.providerId);
+
+      // Verify response
+      expect(result.status_code).toBe(HttpStatus.OK);
+      expect(result.data.user.id).toBe('existing-user-1');
+    });
+
+    it('throws conflict when same email has different Google provider ID', async () => {
+      const existingUser = {
+        id: 'google-user-1',
+        email: googleProfile.email,
+        auth_provider: 'google',
+        provider_user_id: 'different-google-id',
+        full_name: 'John Doe',
+      };
+
+      userRepositoryMock.findOne.mockResolvedValueOnce(existingUser);
+
+      await expect(service.handleOAuthLogin(googleProfile)).rejects.toThrow(CustomHttpException);
+    });
+
+    it('persists session and returns tokens', async () => {
+      const user = {
+        id: 'user-1',
+        email: googleProfile.email,
+        full_name: googleProfile.full_name,
+        avatar_url: googleProfile.avatar_url,
+      };
+
+      userRepositoryMock.findOne.mockResolvedValueOnce(user);
+      userRepositoryMock.save.mockResolvedValueOnce(user);
+      userSessionRepositoryMock.create.mockImplementation(input => input);
+      userSessionRepositoryMock.save.mockResolvedValueOnce({
+        id: 'session-1',
+        user_id: 'user-1',
+        refresh_token: 'hashed-token',
+      });
+      jwtServiceMock.sign.mockReturnValueOnce('access-jwt');
+
+      const result = await service.handleOAuthLogin(googleProfile);
+
+      // Verify session was created with hashed token (not plaintext)
+      const sessionPayload = userSessionRepositoryMock.create.mock.calls[0][0];
+      expect(sessionPayload.refresh_token).toBeDefined();
+      // The hash should be different from a simple UUID
+      expect(sessionPayload.refresh_token).toMatch(/^[a-f0-9]{64}$/); // SHA256 hex format
+
+      // Verify JWT was signed
+      expect(jwtServiceMock.sign).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: 'user-1',
+          email: googleProfile.email,
+        })
+      );
+
+      // Verify plaintext token returned to client
+      expect(result.refresh_token).toBeDefined();
+      expect(result.refresh_token).not.toBe(sessionPayload.refresh_token);
+      expect(result.access_token).toBe('access-jwt');
+    });
+
+    it('does not block login when Redis fails', async () => {
+      const user = {
+        id: 'user-1',
+        email: googleProfile.email,
+        full_name: googleProfile.full_name,
+        avatar_url: googleProfile.avatar_url,
+      };
+
+      userRepositoryMock.findOne.mockResolvedValueOnce(user);
+      userRepositoryMock.save.mockResolvedValueOnce(user);
+      userSessionRepositoryMock.create.mockImplementation(input => input);
+      userSessionRepositoryMock.save.mockResolvedValueOnce({
+        id: 'session-1',
+        user_id: 'user-1',
+        refresh_token: 'hashed-token',
+      });
+      jwtServiceMock.sign.mockReturnValueOnce('access-jwt');
+
+      // Mock Redis to throw error but ensure it doesn't propagate
+      const originalConsoleError = console.error;
+      console.error = jest.fn();
+
+      const result = await service.handleOAuthLogin(googleProfile);
+
+      // Verify login succeeds despite Redis error
+      expect(result.status_code).toBe(HttpStatus.OK);
+      expect(result.access_token).toBe('access-jwt');
+      expect(result.refresh_token).toBeDefined();
+
+      console.error = originalConsoleError;
+    });
+
+    it('rejects OAuth profile with missing email', async () => {
+      const profileWithoutEmail = {
+        ...googleProfile,
+        email: '',
+      };
+
+      await expect(service.handleOAuthLogin(profileWithoutEmail)).rejects.toThrow(CustomHttpException);
+    });
+
+    it('normalizes email to lowercase', async () => {
+      const profileWithUpperEmail = {
+        ...googleProfile,
+        email: 'USER@EXAMPLE.COM',
+      };
+
+      userRepositoryMock.findOne.mockResolvedValueOnce(null);
+      userRepositoryMock.create.mockImplementation(input => input);
+      userRepositoryMock.save.mockResolvedValueOnce({
+        id: 'user-1',
+        email: 'user@example.com',
+        full_name: googleProfile.full_name,
+        avatar_url: googleProfile.avatar_url,
+      });
+      userRepositoryMock.save.mockResolvedValueOnce({
+        id: 'user-1',
+        email: 'user@example.com',
+        full_name: googleProfile.full_name,
+        avatar_url: googleProfile.avatar_url,
+      });
+      userSessionRepositoryMock.create.mockImplementation(input => input);
+      userSessionRepositoryMock.save.mockResolvedValueOnce({
+        id: 'session-1',
+        user_id: 'user-1',
+        refresh_token: 'hashed-token',
+      });
+      jwtServiceMock.sign.mockReturnValueOnce('access-jwt');
+
+      await service.handleOAuthLogin(profileWithUpperEmail);
+
+      // Verify email was normalized in queries and creation
+      expect(userRepositoryMock.findOne).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { email: 'user@example.com' } })
+      );
+      const createdUser = userRepositoryMock.create.mock.calls[0][0];
+      expect(createdUser.email).toBe('user@example.com');
     });
   });
 });

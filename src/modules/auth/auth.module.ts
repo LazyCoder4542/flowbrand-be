@@ -9,6 +9,7 @@ import AuthenticationService from './auth.service';
 import { GoogleStrategy } from '../strategies/google.strategy';
 import { AuthMetadata } from './entities/auth-metadata.entity';
 import { UserSession } from './entities/user-session.entity';
+import { RedisModule } from '@modules/redis/redis.module';
 import type { StringValue } from 'ms';
 
 const expiry = authConfig().jwtExpiry;
@@ -25,6 +26,7 @@ const expiry = authConfig().jwtExpiry;
         expiresIn: `${expiry}` as unknown as StringValue,
       },
     }),
+    RedisModule,
   ],
   exports: [TypeOrmModule],
 })
