@@ -35,7 +35,7 @@ env:
   # the variable in the UI and the next run picks it up automatically.
   DEPLOY_DIR: ${{ vars.DEPLOY_DIR }}
   PM2_ENV: ${{ inputs.environment == 'prod' && 'main' || inputs.environment }}
-  REMOTE_TMP: /tmp/nestjs
+  REMOTE_TMP: /home/${{ secrets.USERNAME }}/tmp/nestjs
 
 jobs:
   deploy:
@@ -75,6 +75,8 @@ jobs:
           envs: DEPLOY_DIR,PM2_ENV,REMOTE_TMP,TARBALL
           script: |
             set -euo pipefail
+
+            mkdir -p "${REMOTE_TMP}"
 
             TARBALL="${{ inputs.tarball }}"
 
