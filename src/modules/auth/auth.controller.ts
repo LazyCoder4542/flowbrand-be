@@ -2,7 +2,6 @@ import { Body, Controller, HttpCode, HttpStatus, Post, Req, Get, UseGuards, Res 
 import { AuthGuard } from '@nestjs/passport';
 import { ApiBearerAuth, ApiBody, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { Request, Response } from 'express';
-import { Request } from 'express';
 import * as SYS_MSG from '@shared/constants/SystemMessages';
 import { skipAuth } from '@shared/helpers/skipAuth';
 import AuthenticationService from './auth.service';
