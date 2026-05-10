@@ -1,5 +1,3 @@
-import { MailerModule } from '@nestjs-modules/mailer';
-// import { HandlebarsAdapter } from '@nestjs-modules/mailer';
 import { BullModule } from '@nestjs/bull';
 import { Module, ValidationPipe } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
@@ -30,7 +28,7 @@ import { RedisModule } from '@modules/redis/redis.module';
 import { join } from 'path';
 import { ApiStatusModule } from '@modules/api-status/api-status.module';
 import s3Config from '@config/s3.config';
-import { HandlebarsAdapter } from '@nestjs-modules/mailer/adapters/handlebars.adapter';
+import mailerConfig from '@config/mailer.config';
 
 @Module({
   providers: [
@@ -55,7 +53,7 @@ import { HandlebarsAdapter } from '@nestjs-modules/mailer/adapters/handlebars.ad
     ConfigModule.forRoot({
       envFilePath: ['.env.development.local', `.env.${process.env.PROFILE}`],
       isGlobal: true,
-      load: [serverConfig, authConfig, s3Config],
+      load: [serverConfig, authConfig, s3Config, mailerConfig],
       validationSchema: Joi.object({
         NODE_ENV: Joi.string().valid('development', 'production', 'test', 'provision').required(),
         PROFILE: Joi.string().valid('local', 'development', 'production', 'ci', 'testing', 'staging').required(),
@@ -73,30 +71,6 @@ import { HandlebarsAdapter } from '@nestjs-modules/mailer/adapters/handlebars.ad
     AuthModule,
     UserModule,
     EmailModule,
-    MailerModule.forRootAsync({
-      imports: [ConfigModule],
-      useFactory: async (configService: ConfigService) => ({
-        transport: {
-          host: configService.get<string>('SMTP_HOST'),
-          port: configService.get<number>('SMTP_PORT'),
-          auth: {
-            user: configService.get<string>('SMTP_USER'),
-            pass: configService.get<string>('SMTP_PASSWORD'),
-          },
-        },
-        defaults: {
-          from: `"Team Remote Bingo" <${configService.get<string>('SMTP_USER')}>`,
-        },
-        template: {
-          dir: process.cwd() + '/src/modules/email/templates',
-          adapter: new HandlebarsAdapter(),
-          options: {
-            strict: true,
-          },
-        },
-      }),
-      inject: [ConfigService],
-    }),
     BullModule.forRootAsync({
       useFactory: () => ({
         redis: {
@@ -127,4 +101,4 @@ import { HandlebarsAdapter } from '@nestjs-modules/mailer/adapters/handlebars.ad
   ],
   controllers: [HealthController, ProbeController],
 })
-export class AppModule {}
+export class AppModule { }

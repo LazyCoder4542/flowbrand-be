@@ -1,0 +1,107 @@
+name: _deploy
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: 'Target environment (dev | staging | prod)'
+        required: true
+        type: string
+      artifact_name:
+        description: 'GitHub Actions artifact name produced by the build job'
+        required: true
+        type: string
+      tarball:
+        description: 'Tarball filename (e.g. nestjs-dev.tar.gz)'
+        required: true
+        type: string
+    secrets:
+      HOST:
+        required: true
+      USERNAME:
+        required: true
+      PASSWORD:
+        required: true
+
+env:
+  DEPLOY_DIR: ${{ vars.DEPLOY_DIR }}
+  PM2_ENV: ${{ inputs.environment == 'prod' && 'main' || inputs.environment }}
+  REMOTE_TMP: /home/${{ secrets.USERNAME }}/tmp/nestjs
+
+jobs:
+  deploy:
+    name: Deploy (${{ inputs.environment }})
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+
+    steps:
+      - name: Download build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.artifact_name }}
+
+      - name: Install sshpass
+        run: sudo apt-get install -y sshpass
+
+      - name: Prepare SSH helper
+        # Write a one-liner wrapper so we don't repeat the sshpass boilerplate.
+        # SSHPASS env var is read by sshpass automatically — keeps the password
+        # out of the process argument list.
+        run: |
+          echo "SSHPASS=${{ secrets.PASSWORD }}" >> $GITHUB_ENV
+
+      - name: Ensure remote tmp directory exists
+        run: |
+          sshpass -e ssh -o StrictHostKeyChecking=no \
+            ${{ secrets.USERNAME }}@${{ secrets.HOST }} \
+            "mkdir -p /home/${{ secrets.USERNAME }}/tmp/nestjs"
+
+      - name: Copy tarball to server
+        run: |
+          echo "══════════════════════════════════════════"
+          echo "  Copying ${{ inputs.tarball }} → ${{ secrets.HOST }}:${{ env.REMOTE_TMP }}"
+          echo "══════════════════════════════════════════"
+          sshpass -e scp -o StrictHostKeyChecking=no \
+            ${{ inputs.tarball }} \
+            ${{ secrets.USERNAME }}@${{ secrets.HOST }}:${{ env.REMOTE_TMP }}/
+
+      - name: Deploy on server
+        env:
+          TARBALL: ${{ inputs.tarball }}
+          ENVIRONMENT: ${{ inputs.environment }}
+        run: |
+          sshpass -e ssh -o StrictHostKeyChecking=no \
+            ${{ secrets.USERNAME }}@${{ secrets.HOST }} << REMOTE
+            set -euo pipefail
+
+            DEPLOY_DIR="${{ env.DEPLOY_DIR }}"
+            PM2_ENV="${{ env.PM2_ENV }}"
+            REMOTE_TMP="/home/${{ secrets.USERNAME }}/tmp/nestjs"
+            TARBALL="${{ inputs.tarball }}"
+
+            echo "══════════════════════════════════════════"
+            echo "  Environment : ${{ inputs.environment }}"
+            echo "  Deploy dir  : \${DEPLOY_DIR}"
+            echo "  PM2 env     : \${PM2_ENV}"
+            echo "══════════════════════════════════════════"
+
+            echo "── Navigating to deploy dir ───────────────"
+            cd "\${DEPLOY_DIR}"
+
+            echo "── Extracting tarball ─────────────────────"
+            tar -xzf "\${REMOTE_TMP}/\${TARBALL}" -C .
+            rm -f "\${REMOTE_TMP}/\${TARBALL}"
+
+            echo "── Moving runtime files out of dist ───────"
+            mv dist/package.json .
+            mv dist/*-ecosystem-config.json .
+            mv dist/deployment.sh .
+
+            echo "── Running deployment script ──────────────"
+            chmod +x deployment.sh
+            ./deployment.sh "\${PM2_ENV}"
+
+            echo "══════════════════════════════════════════"
+            echo "  ✅ Deploy complete (${{ inputs.environment }})"
+            echo "══════════════════════════════════════════"
+          REMOTE
