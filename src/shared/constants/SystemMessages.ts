@@ -30,6 +30,8 @@ export const TIMEZONE_ALREADY_EXISTS = 'Timezone already exists';
 export const INVALID_CREDENTIALS = 'Invalid credentials';
 export const LOGIN_SUCCESSFUL = 'Login successful';
 export const LOGIN_ERROR = 'An error occurred during login';
+export const ACCOUNT_LOCKED = 'Account locked. Please try again later.';
+export const ACCOUNT_LOCKED_SECONDS = (seconds: number) => `Account locked. Try again in ${seconds} seconds.`;
 export const EMAIL_SENT = 'Email sent successfully';
 export const ENABLE_2FA_ERROR = 'Error occured enabling 2fa';
 export const ALREADY_ENABLED_2FA = '2FA already enabled on your account';

@@ -2,6 +2,9 @@ import { Body, Controller, HttpCode, HttpStatus, Post, Req, Get, UseGuards, Res 
 import { AuthGuard } from '@nestjs/passport';
 import { ApiBearerAuth, ApiBody, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { Request, Response } from 'express';
+import { Body, Controller, HttpCode, HttpStatus, Post, Req } from '@nestjs/common';
+import { ApiBody, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { Request } from 'express';
 import * as SYS_MSG from '@shared/constants/SystemMessages';
 import { skipAuth } from '@shared/helpers/skipAuth';
 import AuthenticationService from './auth.service';
@@ -11,6 +14,7 @@ import { ChangePasswordDto } from './dto/change-password.dto';
 import { GoogleOAuthProfile, OAuthLoginResponse } from './dto/google-oauth.dto';
 import authConfig from '@config/auth.config';
 import { CustomHttpException } from '@shared/helpers/custom-http-filter';
+import { LoginDocs, ChangePasswordDocs } from './docs/auth-swagger.doc';
 
 @ApiTags('Authentication')
 @Controller('auth')
@@ -30,11 +34,7 @@ export default class RegistrationController {
 
   @skipAuth()
   @Post('login')
-  @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Log a user in' })
-  @ApiBody({ type: LoginDto })
-  @ApiResponse({ status: HttpStatus.OK, description: SYS_MSG.LOGIN_SUCCESSFUL })
-  @ApiResponse({ status: HttpStatus.UNAUTHORIZED, description: SYS_MSG.INVALID_CREDENTIALS })
+  @LoginDocs()
   async login(@Body() loginDto: LoginDto) {
     return this.authService.loginUser(loginDto);
   }
@@ -101,10 +101,7 @@ export default class RegistrationController {
 
   @ApiBearerAuth()
   @Post('change-password')
-  @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Change a user password' })
-  @ApiBody({ type: ChangePasswordDto })
-  @ApiResponse({ status: HttpStatus.OK, description: SYS_MSG.PASSWORD_UPDATED })
+  @ChangePasswordDocs()
   async changePassword(@Body() body: ChangePasswordDto, @Req() request: Request) {
     const user = request['user'] as { id: string };
     return this.authService.changePassword(user.id, body.oldPassword, body.newPassword);

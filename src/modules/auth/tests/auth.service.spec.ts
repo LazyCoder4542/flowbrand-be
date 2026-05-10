@@ -35,6 +35,22 @@ describe('AuthenticationService', () => {
     get: jest.fn(),
     del: jest.fn(),
   };
+import { LockoutService } from '../lockout.service';
+import { SessionService } from '../session.service';
+
+describe('AuthenticationService', () => {
+  let service: AuthenticationService;
+
+  const userRepositoryMock = { findOne: jest.fn(), create: jest.fn(), save: jest.fn() };
+  const jwtServiceMock = { sign: jest.fn() };
+  const lockoutServiceMock = {
+    findOrCreate: jest.fn(),
+    isLocked: jest.fn(),
+    secondsRemaining: jest.fn(),
+    recordFailure: jest.fn(),
+    clear: jest.fn(),
+  };
+  const sessionServiceMock = { create: jest.fn() };
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
@@ -44,6 +60,8 @@ describe('AuthenticationService', () => {
         { provide: getRepositoryToken(UserSession), useValue: userSessionRepositoryMock },
         { provide: JwtService, useValue: jwtServiceMock },
         { provide: RedisService, useValue: redisServiceMock },
+        { provide: LockoutService, useValue: lockoutServiceMock },
+        { provide: SessionService, useValue: sessionServiceMock },
       ],
     }).compile();
 
@@ -101,6 +119,8 @@ describe('AuthenticationService', () => {
   });
 
   describe('loginUser', () => {
+    const metaMock = { id: 'meta-1', user_id: 'user-1', failed_attempts: 0, locked_until: null };
+
     it('returns an access token for valid credentials', async () => {
       const password = 'P@ssword123';
       const hashed = await bcrypt.hash(password, 10);
@@ -111,12 +131,16 @@ describe('AuthenticationService', () => {
         avatar_url: null,
         password: hashed,
       });
+      lockoutServiceMock.findOrCreate.mockResolvedValueOnce(metaMock);
+      lockoutServiceMock.isLocked.mockReturnValueOnce(false);
+      lockoutServiceMock.clear.mockResolvedValueOnce(undefined);
+      sessionServiceMock.create.mockResolvedValueOnce({ rawToken: 'raw-token', sessionId: 'session-1' });
       jwtServiceMock.sign.mockReturnValueOnce('jwt');
 
-      const result = await service.loginUser({ email: 'jane@example.com', password });
+      const result = (await service.loginUser({ email: 'jane@example.com', password })) as Record<string, unknown>;
 
       expect(result.message).toBe(SYS_MSG.LOGIN_SUCCESSFUL);
-      expect(result.access_token).toBe('jwt');
+      expect((result.data as Record<string, unknown>).access_token).toBe('jwt');
     });
 
     it('rejects unknown emails', async () => {
@@ -133,6 +157,10 @@ describe('AuthenticationService', () => {
         avatar_url: null,
         password: hashed,
       });
+      lockoutServiceMock.findOrCreate.mockResolvedValueOnce(metaMock);
+      lockoutServiceMock.isLocked.mockReturnValueOnce(false);
+      lockoutServiceMock.recordFailure.mockResolvedValueOnce(undefined);
+
       await expect(service.loginUser({ email: 'jane@example.com', password: 'wrong-password' })).rejects.toThrow(
         CustomHttpException
       );
@@ -145,6 +173,22 @@ describe('AuthenticationService', () => {
         password: null,
       });
       await expect(service.loginUser({ email: 'jane@example.com', password: 'anything' })).rejects.toThrow(
+        CustomHttpException
+      );
+    });
+
+    it('throws FORBIDDEN when the account is locked', async () => {
+      const hashed = await bcrypt.hash('pass', 10);
+      userRepositoryMock.findOne.mockResolvedValueOnce({
+        id: 'user-1',
+        email: 'jane@example.com',
+        password: hashed,
+      });
+      lockoutServiceMock.findOrCreate.mockResolvedValueOnce(metaMock);
+      lockoutServiceMock.isLocked.mockReturnValueOnce(true);
+      lockoutServiceMock.secondsRemaining.mockReturnValueOnce(300);
+
+      await expect(service.loginUser({ email: 'jane@example.com', password: 'pass' })).rejects.toThrow(
         CustomHttpException
       );
     });
