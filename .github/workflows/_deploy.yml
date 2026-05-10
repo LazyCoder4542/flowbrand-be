@@ -24,27 +24,15 @@ on:
         required: true
 
 env:
-  # DEPLOY_DIR comes from the GitHub Environment variable of the same name.
-  # Set it in: Settings → Environments → <env> → Variables
-  #
-  #   dev     → /flowbrand/staging      (or wherever dev lives — ask B-Nockk)
-  #   staging → /flowbrand/staging
-  #   prod    → /flowbrand/production
-  #
-  # This means the workflow never needs to change when paths shift — update
-  # the variable in the UI and the next run picks it up automatically.
   DEPLOY_DIR: ${{ vars.DEPLOY_DIR }}
   PM2_ENV: ${{ inputs.environment == 'prod' && 'main' || inputs.environment }}
+  # Staging dir under home — guaranteed writable, created before scp runs.
   REMOTE_TMP: /home/${{ secrets.USERNAME }}/tmp/nestjs
 
 jobs:
   deploy:
     name: Deploy (${{ inputs.environment }})
     runs-on: ubuntu-latest
-    # Ties this job to a GitHub Environment so you get:
-    #   - protection rules (required reviewers, wait timers) on staging/prod
-    #   - per-environment secret scoping if you ever need it
-    #   - a clean deployment history in the GitHub UI
     environment: ${{ inputs.environment }}
 
     steps:
@@ -55,6 +43,14 @@ jobs:
 
       - name: Install sshpass
         run: sudo apt-get install -y sshpass
+
+      - name: Ensure remote tmp directory exists
+        # This must run before scp — scp cannot create directories itself.
+        run: |
+          sshpass -p "${{ secrets.PASSWORD }}" \
+            ssh -o StrictHostKeyChecking=no \
+            ${{ secrets.USERNAME }}@${{ secrets.HOST }} \
+            "mkdir -p /home/${{ secrets.USERNAME }}/tmp/nestjs"
 
       - name: Copy tarball to server
         run: |
@@ -72,11 +68,9 @@ jobs:
           host: ${{ secrets.HOST }}
           username: ${{ secrets.USERNAME }}
           password: ${{ secrets.PASSWORD }}
-          envs: DEPLOY_DIR,PM2_ENV,REMOTE_TMP,TARBALL
+          envs: DEPLOY_DIR,PM2_ENV,REMOTE_TMP
           script: |
             set -euo pipefail
-
-            mkdir -p "${REMOTE_TMP}"
 
             TARBALL="${{ inputs.tarball }}"
 
@@ -86,6 +80,7 @@ jobs:
             echo "  PM2 env     : ${PM2_ENV}"
             echo "══════════════════════════════════════════"
 
+            echo "── Navigating to deploy dir ───────────────"
             cd "${DEPLOY_DIR}"
 
             echo "── Extracting tarball ─────────────────────"
