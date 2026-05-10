@@ -16,6 +16,7 @@ import { FRONTEND_RESET_PASSWORD } from '@shared/constants/app-constants';
 
 const OTP_LENGTH = 6;
 const OTP_EXPIRY_MINUTES = 10;
+const RESET_OTP_TTL_SECONDS = 300;
 
 @Injectable()
 export default class AuthenticationService {
@@ -117,9 +118,9 @@ export default class AuthenticationService {
     const user = await this.userRepository.findOne({ where: { email } });
     if (user) {
       const otp = this.generateOtp();
-      const key = `$reset_otp:${email}`;
+      const key = `reset_otp:${email}`;
       try {
-        await this.redisService.set(key, otp, 300);
+        await this.redisService.set(key, otp, RESET_OTP_TTL_SECONDS);
         await this.emailService.sendForgotPasswordMail(
           email,
           user.full_name,
@@ -127,7 +128,10 @@ export default class AuthenticationService {
           otp
         );
       } catch (err) {
-        this.logger.error(`Failed to issue password reset OTP for ${email}`, (err as Error).message);
+        this.logger.error(
+          `Failed to issue password reset OTP for user ${user.id}`,
+          (err as Error).stack ?? (err as Error).message
+        );
       }
     }
     return {
@@ -137,14 +141,14 @@ export default class AuthenticationService {
   }
 
   async resetPassword(email: string, otp: string, newPassword: string) {
-    const key = `$reset_otp:${email}`;
+    const key = `reset_otp:${email}`;
     const storedOtp = await this.redisService.get(key);
-    const user = await this.userRepository.findOne({ where: { email } });
 
     if (otp !== storedOtp) {
       throw new CustomHttpException(SYS_MSG.INCORRECT_TOTP_CODE, HttpStatus.BAD_REQUEST);
     }
 
+    const user = await this.userRepository.findOne({ where: { email } });
     if (!user) {
       await this.redisService.del(key);
       throw new CustomHttpException(SYS_MSG.INCORRECT_TOTP_CODE, HttpStatus.BAD_REQUEST);

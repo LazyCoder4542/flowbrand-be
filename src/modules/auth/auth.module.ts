@@ -15,7 +15,7 @@ import { EmailService } from '@modules/email/email.service';
 const expiry = authConfig().jwtExpiry;
 @Module({
   controllers: [RegistrationController],
-  providers: [AuthenticationService, EmailService],
+  providers: [AuthenticationService],
   imports: [
     TypeOrmModule.forFeature([User, AuthMetadata, UserSession]),
     PassportModule,

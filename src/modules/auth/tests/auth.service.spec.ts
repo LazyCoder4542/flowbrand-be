@@ -180,7 +180,11 @@ describe('AuthenticationService', () => {
 
   describe('forgotPassword', () => {
     it('stores an OTP in Redis and returns success for a known email', async () => {
-      userRepositoryMock.findOne.mockResolvedValueOnce({ id: 'user-1', email: 'jane@example.com' });
+      userRepositoryMock.findOne.mockResolvedValueOnce({
+        id: 'user-1',
+        email: 'jane@example.com',
+        full_name: 'Jane Doe',
+      });
 
       const result = await service.forgotPassword('jane@example.com');
 
@@ -191,6 +195,26 @@ describe('AuthenticationService', () => {
         expect.stringMatching(/^\d{6}$/),
         300
       );
+      expect(emailServiceMock.sendForgotPasswordMail).toHaveBeenCalledWith(
+        'jane@example.com',
+        'Jane Doe',
+        expect.stringContaining('jane@example.com'),
+        expect.stringMatching(/^\d{6}$/)
+      );
+    });
+
+    it('still returns success when OTP issuance fails (enumeration-safe)', async () => {
+      userRepositoryMock.findOne.mockResolvedValueOnce({
+        id: 'user-1',
+        email: 'jane@example.com',
+        full_name: 'Jane Doe',
+      });
+      redisServiceMock.set.mockRejectedValueOnce(new Error('redis down'));
+
+      const result = await service.forgotPassword('jane@example.com');
+
+      expect(result.status_code).toBe(HttpStatus.OK);
+      expect(result.message).toBe(SYS_MSG.FORGOT_PASSWORD_OTP_SENT);
     });
 
     it('returns the same success response for an unknown email without touching Redis', async () => {
@@ -207,7 +231,7 @@ describe('AuthenticationService', () => {
   describe('resetPassword', () => {
     const email = 'jane@example.com';
     const otp = '123456';
-    const key = `$reset_otp:${email}`;
+    const key = `reset_otp:${email}`;
 
     it('resets the password and revokes all sessions for a valid OTP', async () => {
       redisServiceMock.get.mockResolvedValueOnce(otp);
@@ -232,17 +256,17 @@ describe('AuthenticationService', () => {
 
     it('throws for an invalid or expired OTP', async () => {
       redisServiceMock.get.mockResolvedValueOnce(null);
-      userRepositoryMock.findOne.mockResolvedValueOnce({ id: 'user-1', email });
 
       await expect(service.resetPassword(email, 'wrong', 'NewP@ss123')).rejects.toThrow(CustomHttpException);
+      expect(userRepositoryMock.findOne).not.toHaveBeenCalled();
       expect(userRepositoryMock.save).not.toHaveBeenCalled();
     });
 
     it('throws for an OTP mismatch', async () => {
       redisServiceMock.get.mockResolvedValueOnce('654321');
-      userRepositoryMock.findOne.mockResolvedValueOnce({ id: 'user-1', email });
 
       await expect(service.resetPassword(email, otp, 'NewP@ss123')).rejects.toThrow(CustomHttpException);
+      expect(userRepositoryMock.findOne).not.toHaveBeenCalled();
       expect(userRepositoryMock.save).not.toHaveBeenCalled();
     });
 
