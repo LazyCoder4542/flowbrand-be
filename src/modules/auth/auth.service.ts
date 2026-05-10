@@ -96,11 +96,8 @@ export default class AuthenticationService {
     // Normalize email: trim whitespace and convert to lowercase
     // Matches normalization performed during user creation and OAuth login
     const email = loginDto.email.trim().toLowerCase();
-
-    const user = await this.userRepository.findOne({ where: { email } });
-  async loginUser(loginDto: LoginDto): Promise<object> {
+    
     const user = await this.userRepository.findOne({ where: { email: loginDto.email } });
-
     if (!user || !user.password) {
       throw new CustomHttpException(SYS_MSG.INVALID_CREDENTIALS, HttpStatus.UNAUTHORIZED);
     }
