@@ -155,7 +155,10 @@ export default class AuthenticationService {
    */
   private hashRefreshToken(token: string): string {
     const config = authConfig();
-    const secret = config.jwtRefreshSecret || 'default-refresh-secret';
+    const secret = config.jwtRefreshSecret;
+    if (!secret) {
+      throw new Error('jwtRefreshSecret is not configured');
+    }
     return crypto.createHmac('sha256', secret).update(token).digest('hex');
   }
 
@@ -251,9 +254,15 @@ export default class AuthenticationService {
     const savedSession = await this.userSessionRepository.save(session);
 
     // Store refresh token hash in Redis using shared RedisService
-    // Redis failure should not block login; RedisService handles errors gracefully
+    // Redis failure should not block login; swallow Redis errors so login proceeds
     const key = `active_session:${user.id}:${savedSession.id}`;
-    await this.redisService.set(key, refreshTokenHash, refreshExpirySeconds);
+    try {
+      await this.redisService.set(key, refreshTokenHash, refreshExpirySeconds);
+    } catch (e) {
+      // Log and continue — do not block the OAuth login flow for Redis failures
+
+      console.error('Redis set failed during OAuth login:', e);
+    }
 
     const access_token = this.jwtService.sign({ id: user.id, sub: user.id, email: user.email });
 

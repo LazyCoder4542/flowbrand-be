@@ -9,6 +9,8 @@ import { CreateUserDTO } from './dto/create-user.dto';
 import { LoginDto } from './dto/login.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
 import { GoogleOAuthProfile, OAuthLoginResponse } from './dto/google-oauth.dto';
+import authConfig from '@config/auth.config';
+import { CustomHttpException } from '@shared/helpers/custom-http-filter';
 
 @ApiTags('Authentication')
 @Controller('auth')
@@ -71,13 +73,29 @@ export default class RegistrationController {
         secure: true,
         sameSite: 'lax',
       });
-      res.redirect(HttpStatus.FOUND, '/dashboard');
+
+      const frontend = authConfig().frontendUrl || '';
+      const target = frontend ? `${frontend.replace(/\/$/, '')}/dashboard` : '/dashboard';
+      res.redirect(HttpStatus.FOUND, target);
     } catch (err: unknown) {
-      const error = err as { status?: number; message?: string };
-      res.status(error?.status || HttpStatus.INTERNAL_SERVER_ERROR).json({
-        status_code: error?.status || HttpStatus.INTERNAL_SERVER_ERROR,
-        message: error?.message || SYS_MSG.GOOGLE_OAUTH_FAILED,
-      });
+      const frontend = authConfig().frontendUrl || '';
+      const isCustom = err instanceof CustomHttpException;
+      const safeMessage = isCustom ? (err as any).message : SYS_MSG.GOOGLE_OAUTH_FAILED;
+
+      // Prefer redirecting back to the frontend login with a short error code.
+      const errorParam = isCustom ? encodeURIComponent(String(safeMessage)) : 'oauth_failed';
+      const errorTarget = frontend
+        ? `${frontend.replace(/\/$/, '')}/login?error=${errorParam}`
+        : `/login?error=${errorParam}`;
+
+      // Do not leak internal error details for unknown errors; log and redirect.
+      if (!isCustom) {
+        // preserve original error logging via console (Nest will capture logs too)
+
+        console.error('OAuth login error:', err);
+      }
+
+      res.status(HttpStatus.FOUND).redirect(errorTarget);
     }
   }
 

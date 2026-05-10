@@ -13,6 +13,8 @@ import { RedisService } from '@modules/redis/services/redis.service';
 
 describe('AuthenticationService', () => {
   let service: AuthenticationService;
+  // Ensure jwt refresh secret is set for hashing in tests
+  process.env.JWT_REFRESH_SECRET = process.env.JWT_REFRESH_SECRET || 'test-refresh-secret';
   const userRepositoryMock = {
     findOne: jest.fn(),
     create: jest.fn(),
@@ -339,7 +341,6 @@ describe('AuthenticationService', () => {
         full_name: googleProfile.full_name,
         avatar_url: googleProfile.avatar_url,
       };
-
       userRepositoryMock.findOne.mockResolvedValueOnce(user);
       userRepositoryMock.save.mockResolvedValueOnce(user);
       userSessionRepositoryMock.create.mockImplementation(input => input);
@@ -349,18 +350,15 @@ describe('AuthenticationService', () => {
         refresh_token: 'hashed-token',
       });
       jwtServiceMock.sign.mockReturnValueOnce('access-jwt');
-
-      // Mock Redis to throw error but ensure it doesn't propagate
+      // Make Redis actually fail so we assert handleOAuthLogin is resilient.
+      redisServiceMock.set.mockRejectedValueOnce(new Error('redis down'));
       const originalConsoleError = console.error;
       console.error = jest.fn();
-
       const result = await service.handleOAuthLogin(googleProfile);
-
       // Verify login succeeds despite Redis error
       expect(result.status_code).toBe(HttpStatus.OK);
       expect(result.access_token).toBe('access-jwt');
       expect(result.refresh_token).toBeDefined();
-
       console.error = originalConsoleError;
     });
 

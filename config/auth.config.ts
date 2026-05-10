@@ -15,4 +15,6 @@ export default registerAs('auth', () => ({
     password: process.env.REDIS_PASSWORD,
     username: process.env.REDIS_USERNAME,
   },
+  // Base URL to redirect users to after OAuth login (frontend application)
+  frontendUrl: process.env.FRONTEND_URL || '',
 }));
