@@ -454,4 +454,3 @@ describe('AuthenticationService', () => {
     });
   });
 });
-}
