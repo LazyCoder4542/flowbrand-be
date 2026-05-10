@@ -28,7 +28,7 @@ import { RedisModule } from '@modules/redis/redis.module';
 import { join } from 'path';
 import { ApiStatusModule } from '@modules/api-status/api-status.module';
 import s3Config from '@config/s3.config';
-import { HandlebarsAdapter } from '@nestjs-modules/mailer/adapters/handlebars.adapter';
+import mailerConfig from '@config/mailer.config';
 
 @Module({
   providers: [
@@ -53,7 +53,7 @@ import { HandlebarsAdapter } from '@nestjs-modules/mailer/adapters/handlebars.ad
     ConfigModule.forRoot({
       envFilePath: ['.env.development.local', `.env.${process.env.PROFILE}`],
       isGlobal: true,
-      load: [serverConfig, authConfig, s3Config],
+      load: [serverConfig, authConfig, s3Config, mailerConfig],
       validationSchema: Joi.object({
         NODE_ENV: Joi.string().valid('development', 'production', 'test', 'provision').required(),
         PROFILE: Joi.string().valid('local', 'development', 'production', 'ci', 'testing', 'staging').required(),
