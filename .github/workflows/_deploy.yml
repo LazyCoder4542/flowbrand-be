@@ -24,7 +24,16 @@ on:
         required: true
 
 env:
-  DEPLOY_DIR: boilerplate/nestjs/${{ inputs.environment == 'prod' && 'prod' || inputs.environment }}
+  # DEPLOY_DIR comes from the GitHub Environment variable of the same name.
+  # Set it in: Settings → Environments → <env> → Variables
+  #
+  #   dev     → /flowbrand/staging      (or wherever dev lives — ask B-Nockk)
+  #   staging → /flowbrand/staging
+  #   prod    → /flowbrand/production
+  #
+  # This means the workflow never needs to change when paths shift — update
+  # the variable in the UI and the next run picks it up automatically.
+  DEPLOY_DIR: ${{ vars.DEPLOY_DIR }}
   PM2_ENV: ${{ inputs.environment == 'prod' && 'main' || inputs.environment }}
   REMOTE_TMP: /tmp/nestjs
 
@@ -32,6 +41,10 @@ jobs:
   deploy:
     name: Deploy (${{ inputs.environment }})
     runs-on: ubuntu-latest
+    # Ties this job to a GitHub Environment so you get:
+    #   - protection rules (required reviewers, wait timers) on staging/prod
+    #   - per-environment secret scoping if you ever need it
+    #   - a clean deployment history in the GitHub UI
     environment: ${{ inputs.environment }}
 
     steps:

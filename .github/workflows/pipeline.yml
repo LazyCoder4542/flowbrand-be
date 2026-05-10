@@ -3,25 +3,23 @@ name: Pipeline
 # ══════════════════════════════════════════════════════════════════════════════
 #  TRIGGER STRATEGY
 #
-#  dev      → push to dev branch (fast feedback, ship often)
-#  staging  → semver pre-release tag  (e.g. v1.2.0-rc.1)
-#             gives QA a stable, named cut to test against
-#  prod     → semver release tag      (e.g. v1.2.0)
-#             nothing reaches prod without an explicit, auditable tag
+#  Branch → Environment mapping (branch protection rules enforce no direct push):
+#    dev     → deploys to dev     (on every push, fast feedback)
+#    staging → deploys to staging (gated by GitHub Environment reviewers)
+#    main    → deploys to prod    (gated by GitHub Environment reviewers)
 #
-#  All three also support workflow_dispatch so any environment can be
-#  triggered manually from the GitHub UI without needing a push or tag.
+#  workflow_dispatch lets you trigger any environment manually from the UI
+#  without needing a push — useful for re-deploys and running on ci branch.
 #
-#  PR       → lint + build + test (no deploy). Keeps the main gate fast.
+#  PR → lint + build only, never deploys.
 # ══════════════════════════════════════════════════════════════════════════════
 
 on:
   push:
     branches:
       - dev
-    tags:
-      - 'v[0-9]+.[0-9]+.[0-9]+-rc*' # staging:  v1.2.0-rc.1
-      - 'v[0-9]+.[0-9]+.[0-9]+' # prod:     v1.2.0
+      - staging
+      - main
 
   pull_request:
     branches:
@@ -38,12 +36,14 @@ on:
         options: [dev, staging, prod]
 
 concurrency:
-  # One active pipeline at a time per ref.
-  # Cancels stale in-progress runs when a new push lands on the same branch/tag.
   group: pipeline-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
+  # ════════════════════════════════════════════════════════════════════════════
+  #  PULL REQUEST GATE — validate only, never deploy
+  # ════════════════════════════════════════════════════════════════════════════
+
   lint-pr:
     name: Lint (PR)
     if: github.event_name == 'pull_request'
@@ -65,7 +65,7 @@ jobs:
   #   uses: ./.github/workflows/_test.yml
 
   # ════════════════════════════════════════════════════════════════════════════
-  #  SHARED GATES — run for every non-PR push / tag / dispatch
+  #  SHARED GATES — lint + security run before every non-PR deploy
   # ════════════════════════════════════════════════════════════════════════════
 
   lint:
@@ -85,30 +85,36 @@ jobs:
   #   uses: ./.github/workflows/_test.yml
 
   # ════════════════════════════════════════════════════════════════════════════
-  #  BUILD
-  #  Resolves which environment to target, then produces a versioned tarball
-  #  and uploads it as a GitHub Actions artifact for the deploy jobs to consume.
+  #  BUILD — resolves environment from branch or dispatch input
   # ════════════════════════════════════════════════════════════════════════════
 
   build:
     name: Build
     if: github.event_name != 'pull_request'
     needs: [lint, security]
+    # ── Uncomment the line below once tests are active ──────────────────────
+    # needs: [lint, security, test]
     uses: ./.github/workflows/_build.yml
     with:
       environment: >-
         ${{
           github.event_name == 'workflow_dispatch' && inputs.environment ||
-          (startsWith(github.ref, 'refs/tags/') && contains(github.ref, '-rc') && 'staging') ||
-          (startsWith(github.ref, 'refs/tags/') && !contains(github.ref, '-rc') && 'prod') ||
+          github.ref == 'refs/heads/main'    && 'prod'    ||
+          github.ref == 'refs/heads/staging' && 'staging' ||
           'dev'
         }}
+
+  # ════════════════════════════════════════════════════════════════════════════
+  #  DEPLOY — one job per environment, each guarded by its own `if:`
+  #  GitHub Environment protection rules (required reviewers) are the gate
+  #  for staging and prod — no extra code needed, configure in repo Settings.
+  # ════════════════════════════════════════════════════════════════════════════
 
   deploy-dev:
     name: Deploy → dev
     if: |
       github.event_name != 'pull_request' && (
-        (github.event_name == 'push'             && github.ref == 'refs/heads/dev') ||
+        (github.event_name == 'push'              && github.ref == 'refs/heads/dev') ||
         (github.event_name == 'workflow_dispatch' && inputs.environment == 'dev')
       )
     needs: build
@@ -126,7 +132,7 @@ jobs:
     name: Deploy → staging
     if: |
       github.event_name != 'pull_request' && (
-        (github.event_name == 'push'             && startsWith(github.ref, 'refs/tags/') && contains(github.ref, '-rc')) ||
+        (github.event_name == 'push'              && github.ref == 'refs/heads/staging') ||
         (github.event_name == 'workflow_dispatch' && inputs.environment == 'staging')
       )
     needs: build
@@ -144,7 +150,7 @@ jobs:
     name: Deploy → prod
     if: |
       github.event_name != 'pull_request' && (
-        (github.event_name == 'push'             && startsWith(github.ref, 'refs/tags/') && !contains(github.ref, '-rc')) ||
+        (github.event_name == 'push'              && github.ref == 'refs/heads/main') ||
         (github.event_name == 'workflow_dispatch' && inputs.environment == 'prod')
       )
     needs: build

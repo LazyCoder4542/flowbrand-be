@@ -1,8 +1,10 @@
 name: _lint
 
 on:
-  workflow_dispatch:
   workflow_call:
+  # Allows this to be run directly from Actions UI on any branch —
+  # useful for testing before a branch is merged (e.g. running on ci branch).
+  workflow_dispatch:
 
 jobs:
   lint:
