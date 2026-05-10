@@ -14,7 +14,6 @@ import { UserSession } from './entities/user-session.entity';
 import { GoogleOAuthProfile, OAuthLoginResponse } from './dto/google-oauth.dto';
 import { v4 as uuidv4 } from 'uuid';
 import { RedisService } from '@modules/redis/services/redis.service';
-import authConfig from '@config/auth.config';
 import { LockoutService } from './lockout.service';
 import { SessionService } from './session.service';
 
