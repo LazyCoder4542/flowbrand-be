@@ -47,7 +47,7 @@ export default class AuthenticationService {
     @InjectRepository(UserSession)
     private readonly userSessionRepository: Repository<UserSession>,
     private readonly jwtService: JwtService,
-    private readonly redisService: RedisService
+    private readonly redisService: RedisService,
     private readonly lockoutService: LockoutService,
     private readonly sessionService: SessionService
   ) {}
