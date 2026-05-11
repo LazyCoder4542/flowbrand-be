@@ -52,12 +52,10 @@ export default class RegistrationController {
   async googleAuthRedirect(@Req() req: Request & { user?: GoogleOAuthProfile }, @Res() res: Response): Promise<void> {
     const payload = req.user;
 
-    if (!payload) {
-      res.status(HttpStatus.UNAUTHORIZED).json({
-        status_code: HttpStatus.UNAUTHORIZED,
-        message: SYS_MSG.GOOGLE_OAUTH_FAILED,
-      });
-
+   if (!payload) {
+      const frontend = (authConfig().frontendUrl || '').replace(/\/$/, '');
+      const target = frontend ? `${frontend}/login?error=oauth_failed` : '/login?error=oauth_failed';
+      res.redirect(HttpStatus.FOUND, target);
       return;
     }
 
