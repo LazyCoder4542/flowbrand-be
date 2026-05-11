@@ -4,10 +4,11 @@ import { PassportModule } from '@nestjs/passport';
 import RegistrationController from './auth.controller';
 import authConfig from '@config/auth.config';
 import AuthenticationService from './auth.service';
-import { GoogleStrategy } from '../strategies/google.strategy';
 import { AuthMetadata } from './entities/auth-metadata.entity';
 import { UserSession } from './entities/user-session.entity';
 import { RedisModule } from '@modules/redis/redis.module';
+import { EmailModule } from '@modules/email/email.module';
+import { GoogleStrategy } from '../strategies/google.strategy';
 import { LockoutService } from './lockout.service';
 import { SessionService } from './session.service';
 import type { StringValue } from 'ms';
@@ -18,6 +19,8 @@ const expiry = authConfig().jwtExpiry;
   providers: [AuthenticationService, GoogleStrategy],
   imports: [
     PassportModule,
+    RedisModule,
+    EmailModule,
     JwtModule.register({
       global: true,
       secret: authConfig().jwtSecret,

@@ -3,7 +3,7 @@ import { JwtService } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import * as bcrypt from 'bcrypt';
-import * as crypto from 'crypto';
+import { createHmac, randomInt } from 'crypto';
 import authConfig from '@config/auth.config';
 import * as SYS_MSG from '@shared/constants/SystemMessages';
 import { CustomHttpException } from '@shared/helpers/custom-http-filter';
@@ -14,11 +14,14 @@ import { UserSession } from './entities/user-session.entity';
 import { GoogleOAuthProfile, OAuthLoginResponse } from './dto/google-oauth.dto';
 import { v4 as uuidv4 } from 'uuid';
 import { RedisService } from '@modules/redis/services/redis.service';
+import QueueService from '@modules/email/queue.service';
 import { LockoutService } from './lockout.service';
 import { SessionService } from './session.service';
 
 const OTP_LENGTH = 6;
-const OTP_EXPIRY_MINUTES = 10;
+const OTP_TTL_SECONDS = 300; // 5 minutes
+const OTP_RESEND_COOLDOWN_SECONDS = 30;
+const MAX_OTP_ATTEMPTS = 5;
 
 @Injectable()
 export default class AuthenticationService {
@@ -47,6 +50,7 @@ export default class AuthenticationService {
     private readonly userSessionRepository: Repository<UserSession>,
     private readonly jwtService: JwtService,
     private readonly redisService: RedisService,
+    private readonly queueService: QueueService,
     private readonly lockoutService: LockoutService,
     private readonly sessionService: SessionService
   ) {}
@@ -63,16 +67,17 @@ export default class AuthenticationService {
     }
 
     const hashedPassword = await bcrypt.hash(createUserDto.password, 10);
-    const user = this.userRepository.create({
-      email,
-      full_name: createUserDto.full_name,
-      country: createUserDto.country ?? null,
-      password: hashedPassword,
-      auth_provider: 'email',
-      otp_code: this.generateOtp(),
-      expires_at: new Date(Date.now() + OTP_EXPIRY_MINUTES * 60 * 1000),
-    });
-    const saved = await this.userRepository.save(user);
+    const saved = await this.userRepository.save(
+      this.userRepository.create({
+        email,
+        full_name: createUserDto.full_name,
+        country: createUserDto.country ?? null,
+        password: hashedPassword,
+        auth_provider: 'email',
+      })
+    );
+
+    await this.issueOtp(saved.email);
 
     const access_token = this.jwtService.sign({ id: saved.id, sub: saved.id, email: saved.email });
 
@@ -95,8 +100,8 @@ export default class AuthenticationService {
     // Normalize email: trim whitespace and convert to lowercase
     // Matches normalization performed during user creation and OAuth login
     const email = loginDto.email.trim().toLowerCase();
-    
-    const user = await this.userRepository.findOne({ where: { email: loginDto.email } });
+
+    const user = await this.userRepository.findOne({ where: { email } });
     if (!user || !user.password) {
       throw new CustomHttpException(SYS_MSG.INVALID_CREDENTIALS, HttpStatus.UNAUTHORIZED);
     }
@@ -156,139 +161,157 @@ export default class AuthenticationService {
     return { status_code: HttpStatus.OK, message: SYS_MSG.PASSWORD_UPDATED };
   }
 
-  private generateOtp(): string {
-    return Math.floor(Math.random() * 10 ** OTP_LENGTH)
-      .toString()
-      .padStart(OTP_LENGTH, '0');
-  }
-
-  private computeOtpExpiry(): Date {
-    return new Date(Date.now() + OTP_EXPIRY_MINUTES * 60 * 1000);
-  }
-
-  /**
-   * Hash a refresh token using HMAC-SHA256 for secure persistence.
-   * @param token - The plaintext refresh token
-   * @returns HMAC-SHA256 hash as hex string
-   */
-  private hashRefreshToken(token: string): string {
-    const config = authConfig();
-    const secret = config.jwtRefreshSecret;
-    if (!secret) {
-      throw new Error('jwtRefreshSecret is not configured');
-    }
-    return crypto.createHmac('sha256', secret).update(token).digest('hex');
-  }
-
-  /**
-   * Verify a refresh token against its stored hash using constant-time comparison.
-   * @param token - The plaintext refresh token from the client
-   * @param hash - The stored hash from DB/Redis
-   * @returns true if token matches hash, false otherwise
-   *
-   * Usage in refresh/revoke endpoints:
-   *   const session = await userSessionRepository.findOne({ where: { id: sessionId } });
-   *   const isValid = this.verifyRefreshToken(incomingRefreshToken, session.refresh_token);
-   *   if (!isValid) throw new UnauthorizedException('Invalid refresh token');
-   */
-  private verifyRefreshToken(token: string, hash: string): boolean {
-    const computed = this.hashRefreshToken(token);
-    return crypto.timingSafeEqual(Buffer.from(computed), Buffer.from(hash));
-  }
-
-  async handleOAuthLogin(payload: GoogleOAuthProfile): Promise<OAuthLoginResponse> {
-    const email = payload.email.trim().toLowerCase();
-    if (!email) {
-      throw new CustomHttpException(SYS_MSG.GOOGLE_ACCOUNT_NO_EMAIL, HttpStatus.BAD_REQUEST);
+  async sendOtp(email: string) {
+    if (await this.redisService.exists(`limit:${email}`)) {
+      throw new CustomHttpException(SYS_MSG.OTP_COOLDOWN, HttpStatus.TOO_MANY_REQUESTS);
     }
 
-    const user = await this.userRepository.manager.transaction(async manager => {
-      const userRepo = manager.getRepository(User);
-      let currentUser = await userRepo.findOne({ where: { email } });
+    const user = await this.userRepository.findOne({ where: { email } });
+    // Silently succeed for unknown emails — prevents account enumeration
+    if (!user) return { status_code: HttpStatus.OK, message: SYS_MSG.OTP_SENT };
 
-      if (!currentUser) {
-        const newUser = userRepo.create({
-          email,
-          full_name: payload.full_name || email,
-          country: null,
-          password: null,
-          auth_provider: 'google',
-          provider_user_id: payload.providerId,
-          otp_code: this.generateOtp(),
-          expires_at: this.computeOtpExpiry(),
-          avatar_url: payload.avatar_url ?? null,
-          is_verified: true,
-        });
+    await this.issueOtp(email);
+    return { status_code: HttpStatus.OK, message: SYS_MSG.OTP_SENT };
+  }
 
-        try {
-          currentUser = await userRepo.save(newUser);
-        } catch (err: unknown) {
-          const error = err as { code?: string };
-          if (error.code !== '23505') {
-            throw err;
-          }
-
-          currentUser = await userRepo.findOne({ where: { email } });
-          if (!currentUser) {
-            throw new CustomHttpException(SYS_MSG.USER_OAUTH_CREATION_FAILED, HttpStatus.INTERNAL_SERVER_ERROR);
-          }
-        }
-      }
-
-      if (currentUser.auth_provider === 'email') {
-        currentUser.auth_provider = 'google';
-        currentUser.provider_user_id = payload.providerId;
-      } else if (
-        currentUser.auth_provider === 'google' &&
-        currentUser.provider_user_id &&
-        currentUser.provider_user_id !== payload.providerId
-      ) {
-        throw new CustomHttpException(SYS_MSG.GOOGLE_ACCOUNT_LINK_CONFLICT, HttpStatus.CONFLICT);
-      } else if (!currentUser.provider_user_id) {
-        currentUser.auth_provider = 'google';
-        currentUser.provider_user_id = payload.providerId;
-      } else if (currentUser.auth_provider !== 'google') {
-        throw new CustomHttpException(SYS_MSG.GOOGLE_ACCOUNT_LINK_CONFLICT, HttpStatus.CONFLICT);
-      }
-
-      currentUser.full_name = payload.full_name || currentUser.full_name;
-      currentUser.avatar_url = payload.avatar_url ?? currentUser.avatar_url;
-      currentUser.is_verified = true;
-
-      return userRepo.save(currentUser);
-    });
-
-    const config = authConfig();
-    const refreshToken = uuidv4();
-    const refreshTokenHash = this.hashRefreshToken(refreshToken);
-    const refreshExpirySeconds = Number(config.jwtRefreshExpiry) || 60 * 60 * 24 * 30;
-    const session = this.userSessionRepository.create({
-      user_id: user.id,
-      refresh_token: refreshTokenHash,
-      expires_at: new Date(Date.now() + refreshExpirySeconds * 1000),
-      is_revoked: false,
-    });
-
-    const savedSession = await this.userSessionRepository.save(session);
-
-    // Store refresh token hash in Redis using shared RedisService
-    // Redis failure should not block login; swallow Redis errors so login proceeds
-    const key = `active_session:${user.id}:${savedSession.id}`;
-    try {
-      await this.redisService.set(key, refreshTokenHash, refreshExpirySeconds);
-    } catch (e) {
-      // Log and continue — do not block the OAuth login flow for Redis failures
-
-      console.error('Redis set failed during OAuth login:', e);
+  async verifyOtp(email: string, otp: string) {
+    const user = await this.userRepository.findOne({ where: { email } });
+    if (!user) {
+      throw new CustomHttpException(SYS_MSG.INVALID_OTP, HttpStatus.BAD_REQUEST);
     }
+
+    // Check OTP existence before burning an attempt — expired OTPs should not penalise the user
+    const hashedOtp = await this.redisService.get(`otp:${email}`);
+    if (!hashedOtp) {
+      throw new CustomHttpException(SYS_MSG.OTP_EXPIRED, HttpStatus.BAD_REQUEST);
+    }
+
+    const attemptsKey = `attempts:${email}`;
+    const attempts = await this.redisService.incr(attemptsKey);
+    if (attempts === 1) {
+      // Use expire (not set) to avoid resetting the counter value in a race
+      await this.redisService.expire(attemptsKey, OTP_TTL_SECONDS);
+    }
+    if ((attempts ?? 0) > MAX_OTP_ATTEMPTS) {
+      throw new CustomHttpException(SYS_MSG.TOO_MANY_OTP_ATTEMPTS, HttpStatus.TOO_MANY_REQUESTS);
+    }
+
+    const isMatch = await bcrypt.compare(otp, hashedOtp);
+    if (!isMatch) {
+      throw new CustomHttpException(SYS_MSG.INVALID_OTP, HttpStatus.BAD_REQUEST);
+    }
+
+    user.is_verified = true;
+    user.otp_code = null;
+    user.expires_at = null;
+    await this.userRepository.save(user);
+
+    await Promise.all([
+      this.redisService.del(`otp:${email}`),
+      this.redisService.del(`attempts:${email}`),
+      this.redisService.del(`limit:${email}`),
+    ]);
 
     const access_token = this.jwtService.sign({ id: user.id, sub: user.id, email: user.email });
 
     return {
       status_code: HttpStatus.OK,
+      message: SYS_MSG.EMAIL_VERIFIED,
+      access_token,
+      data: {
+        user: {
+          id: user.id,
+          full_name: user.full_name,
+          email: user.email,
+          avatar_url: user.avatar_url,
+          is_verified: true,
+        },
+      },
+    };
+  }
+
+  async resendOtp(email: string) {
+    if (await this.redisService.exists(`limit:${email}`)) {
+      throw new CustomHttpException(SYS_MSG.OTP_COOLDOWN, HttpStatus.TOO_MANY_REQUESTS);
+    }
+
+    // Clear stale OTP and attempts so the fresh code starts with a clean slate
+    await Promise.all([this.redisService.del(`otp:${email}`), this.redisService.del(`attempts:${email}`)]);
+
+    const user = await this.userRepository.findOne({ where: { email } });
+    if (!user) return { status_code: HttpStatus.OK, message: SYS_MSG.OTP_SENT };
+
+    await this.issueOtp(email);
+    return { status_code: HttpStatus.OK, message: SYS_MSG.OTP_SENT };
+  }
+
+  async handleOAuthLogin(profile: GoogleOAuthProfile): Promise<OAuthLoginResponse> {
+    const email = profile.email?.trim().toLowerCase();
+
+    if (!email) {
+      throw new CustomHttpException(SYS_MSG.GOOGLE_ACCOUNT_NO_EMAIL, HttpStatus.BAD_REQUEST);
+    }
+
+    const existing = await this.userRepository.findOne({ where: { email } });
+    let user = existing;
+
+    if (user) {
+      if (user.auth_provider === 'google' && user.provider_user_id && user.provider_user_id !== profile.providerId) {
+        throw new CustomHttpException(SYS_MSG.GOOGLE_ACCOUNT_LINK_CONFLICT, HttpStatus.CONFLICT);
+      }
+
+      if (user.auth_provider === 'email' || !user.provider_user_id) {
+        user.auth_provider = 'google';
+        user.provider_user_id = profile.providerId;
+        user.full_name = profile.full_name;
+        user.avatar_url = profile.avatar_url;
+        user = await this.userRepository.save(user);
+      }
+    } else {
+      user = await this.userRepository.save(
+        this.userRepository.create({
+          email,
+          full_name: profile.full_name,
+          avatar_url: profile.avatar_url,
+          password: null,
+          country: null,
+          auth_provider: 'google',
+          provider_user_id: profile.providerId,
+        })
+      );
+    }
+
+    if (!user) {
+      throw new CustomHttpException(SYS_MSG.USER_OAUTH_CREATION_FAILED, HttpStatus.INTERNAL_SERVER_ERROR);
+    }
+
+    const rawRefreshToken = uuidv4();
+    const hashedRefreshToken = this.hashRefreshToken(rawRefreshToken);
+    const refreshExpirySeconds = +(authConfig().jwtRefreshExpiry ?? 604800);
+    const expiresAt = new Date(Date.now() + refreshExpirySeconds * 1000);
+
+    const session = await this.userSessionRepository.save(
+      this.userSessionRepository.create({
+        user_id: user.id,
+        refresh_token: hashedRefreshToken,
+        expires_at: expiresAt,
+        is_revoked: false,
+      })
+    );
+
+    try {
+      await this.redisService.set(`refresh:${session.id}`, hashedRefreshToken, refreshExpirySeconds);
+    } catch (error) {
+      console.error('Failed to persist OAuth refresh token to Redis', error);
+    }
+
+    const access_token = this.jwtService.sign({ id: user.id, sub: user.id, email: user.email, sid: session.id });
+
+    return {
+      status_code: HttpStatus.OK,
       message: SYS_MSG.OAUTH_LOGIN_SUCCESSFUL,
       access_token,
-      refresh_token: refreshToken,
+      refresh_token: rawRefreshToken,
       data: {
         user: {
           id: user.id,
@@ -298,5 +321,38 @@ export default class AuthenticationService {
         },
       },
     };
+  }
+
+  private hashRefreshToken(token: string): string {
+    const secret = authConfig().jwtRefreshSecret;
+
+    if (!secret) {
+      throw new CustomHttpException(SYS_MSG.SERVER_ERROR, HttpStatus.INTERNAL_SERVER_ERROR);
+    }
+
+    return createHmac('sha256', secret).update(token).digest('hex');
+  }
+
+  private verifyRefreshToken(token: string, hash: string): boolean {
+    return this.hashRefreshToken(token) === hash;
+  }
+
+  // Generates a fresh OTP, stores the bcrypt hash in Redis, and queues the email.
+  // The plaintext OTP is never persisted to the database.
+  private async issueOtp(email: string): Promise<void> {
+    const otp = this.generateOtp();
+    const hashedOtp = await bcrypt.hash(otp, 10);
+    await this.redisService.set(`otp:${email}`, hashedOtp, OTP_TTL_SECONDS);
+    await this.redisService.set(`limit:${email}`, '1', OTP_RESEND_COOLDOWN_SECONDS);
+    await this.queueService.sendMail({
+      variant: 'register-otp',
+      mail: { to: email, context: { otp, email } },
+    });
+  }
+
+  private generateOtp(): string {
+    return Math.floor(Math.random() * 10 ** OTP_LENGTH)
+      .toString()
+      .padStart(OTP_LENGTH, '0');
   }
 }

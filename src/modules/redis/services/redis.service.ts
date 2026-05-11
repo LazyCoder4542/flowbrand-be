@@ -95,6 +95,14 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  async expire(key: string, ttl: number): Promise<void> {
+    try {
+      await this.client.expire(key, ttl);
+    } catch (err) {
+      this.logger.error(`EXPIRE failed`, (err as Error).message);
+    }
+  }
+
   async delByPattern(pattern: string): Promise<void> {
     try {
       let cursor = '0';

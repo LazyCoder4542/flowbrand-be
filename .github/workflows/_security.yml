@@ -21,11 +21,15 @@ jobs:
       - name: Install dependencies
         run: npm install --include=dev
 
+      # --omit=dev audits production deps only.
+      # Dev deps (e.g. Webpack, Jest) are excluded intentionally to reduce noise,
+      # but note that a compromised dev dep can still run on the Actions runner
+      # during the install step above. Accepted trade-off for this team.
       - name: Run npm audit
         run: npm audit --audit-level=high --omit=dev
 
   secret-scan:
-    name: Secret Scan (Gitleaks)
+    name: Secret Scan (TruffleHog)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -33,7 +37,115 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Run Gitleaks
-        uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install TruffleHog
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/trufflesecurity/trufflehog/main/scripts/install.sh \
+            | sh -s -- -b /usr/local/bin
+          trufflehog --version
+
+      - name: Run TruffleHog (generate report)
+        run: |
+          set +e
+          trufflehog git --json --no-update file://. > trufflehog-report.json
+          TRUFFLEHOG_EXIT=$?
+          set -e
+
+          # Exit 0 (clean) or 1 (found secrets) are both expected —
+          # we handle the findings downstream via baseline diffing.
+          # Any other code means TruffleHog itself crashed.
+          if [ $TRUFFLEHOG_EXIT -ne 0 ] && [ $TRUFFLEHOG_EXIT -ne 1 ]; then
+            echo "::error::TruffleHog exited with unexpected code $TRUFFLEHOG_EXIT — possible crash."
+            exit $TRUFFLEHOG_EXIT
+          fi
+
+      # TruffleHog outputs NDJSON (one JSON object per line), not a JSON array.
+      # Validate the output is actually JSON before converting, so a plaintext
+      # crash message doesn't silently bypass the empty-file check and cause a
+      # confusing jq parse error downstream.
+      - name: Validate and normalise report to JSON array
+        run: |
+          if [ ! -s trufflehog-report.json ]; then
+            echo "Report is empty — no findings."
+            echo "[]" > trufflehog-report.json
+            exit 0
+          fi
+
+          # Validate every line is valid JSON before slurping into an array.
+          # If any line fails, TruffleHog likely wrote a plaintext error message.
+          if ! jq -e . trufflehog-report.json > /dev/null 2>&1; then
+            echo "::error::trufflehog-report.json contains non-JSON content — TruffleHog may have crashed or written an error message."
+            cat trufflehog-report.json
+            exit 1
+          fi
+
+          jq -s '.' trufflehog-report.json > trufflehog-report-array.json
+          mv trufflehog-report-array.json trufflehog-report.json
+
+      - name: Upload report artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: trufflehog-report
+          path: trufflehog-report.json
+
+      # First run: no baseline file exists — upload the report and exit cleanly.
+      # After review, promote the artifact to .github/trufflehog-baseline.json
+      # and commit it. Subsequent runs will only fail on net-new fingerprints.
+      - name: Compare with baseline and fail on new findings
+        run: |
+          if [ ! -f .github/trufflehog-baseline.json ]; then
+            echo "No baseline file found at .github/trufflehog-baseline.json — skipping diff, not failing."
+            exit 0
+          fi
+
+          jq -n \
+            --slurpfile base .github/trufflehog-baseline.json \
+            --slurpfile found trufflehog-report.json \
+            '
+              ($base[0] | map(.Fingerprint)) as $known |
+              $found[0] | map(select(
+                .Fingerprint as $f |
+                $known | index($f) | not
+              ))
+            ' > trufflehog-new.json
+
+          NEW_COUNT=$(jq 'length' trufflehog-new.json)
+          echo "New findings count: $NEW_COUNT"
+
+          if [ "$NEW_COUNT" -gt 0 ]; then
+            echo "::error::TruffleHog detected $NEW_COUNT new secret(s) not present in the baseline."
+            echo "New findings:"
+            jq '.' trufflehog-new.json
+            exit 1
+          else
+            echo "No new secrets found."
+          fi
+
+  trivy:
+    name: Trivy Scan (IaC + Filesystem)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Pinned to v0.36.0
+      - name: Run Trivy (filesystem + IaC)
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,misconfig,license
+          severity: HIGH,CRITICAL
+          exit-code: 1
+          ignore-unfixed: true
+          format: table
+          output: trivy-report.txt
+
+      - name: Upload Trivy artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: trivy-report
+          path: trivy-report.txt

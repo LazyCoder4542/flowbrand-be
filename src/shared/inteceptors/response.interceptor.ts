@@ -37,21 +37,29 @@ export class ResponseInterceptor implements NestInterceptor {
     const ctx = context.switchToHttp();
     const response = ctx.getResponse();
     const status_code = response.statusCode;
-
     response.setHeader('Content-Type', 'application/json');
-    if (typeof res === 'object' && res !== null) {
-      const obj = res as Record<string, unknown>;
-      const message = (obj['message'] as string) ?? undefined;
-      const data: Record<string, unknown> = { ...obj };
-      delete data['message'];
+    if (res && typeof res === 'object' && !Array.isArray(res)) {
+      const payload = res as Record<string, any>;
+      const { message, ...data } = payload;
+      const req = ctx.getRequest();
+
+      // Redact sensitive fields before logging
+      const safeData = { ...data } as Record<string, any>;
+      if (safeData && (safeData.access_token || safeData.refresh_token || safeData.token)) {
+        if (safeData.access_token) safeData.access_token = '[REDACTED]';
+        if (safeData.refresh_token) safeData.refresh_token = '[REDACTED]';
+        if (safeData.token) safeData.token = '[REDACTED]';
+      }
+
+      this.logger.debug(`Response for ${req.method} ${req.url}: ${JSON.stringify({ message, ...safeData })}`);
 
       return {
         status_code,
         message,
         ...data,
       };
-    } else {
-      return res;
     }
+
+    return res;
   }
 }

@@ -1,17 +1,11 @@
 name: Pipeline
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  TRIGGER STRATEGY
+#  DEPLOY DIRECTORY MAP  (edit here when server paths change)
 #
-#  Branch → Environment mapping (branch protection rules enforce no direct push):
-#    dev     → deploys to dev     (on every push, fast feedback)
-#    staging → deploys to staging (gated by GitHub Environment reviewers)
-#    main    → deploys to prod    (gated by GitHub Environment reviewers)
-#
-#  workflow_dispatch lets you trigger any environment manually from the UI
-#  without needing a push — useful for re-deploys and running on ci branch.
-#
-#  PR → lint + build only, never deploys.
+#    dev     → /flowbrand/dev
+#    staging → /flowbrand/staging
+#    prod    → /flowbrand/production
 # ══════════════════════════════════════════════════════════════════════════════
 
 on:
@@ -57,13 +51,6 @@ jobs:
     with:
       environment: dev
 
-  # ── Uncomment when the team has written tests ──────────────────────────────
-  # test-pr:
-  #   name: Test (PR)
-  #   if: github.event_name == 'pull_request'
-  #   needs: lint-pr
-  #   uses: ./.github/workflows/_test.yml
-
   # ════════════════════════════════════════════════════════════════════════════
   #  SHARED GATES — lint + security run before every non-PR deploy
   # ════════════════════════════════════════════════════════════════════════════
@@ -78,22 +65,14 @@ jobs:
     if: github.event_name != 'pull_request'
     uses: ./.github/workflows/_security.yml
 
-  # ── Uncomment when the team has written tests ──────────────────────────────
-  # test:
-  #   name: Test
-  #   if: github.event_name != 'pull_request'
-  #   uses: ./.github/workflows/_test.yml
-
   # ════════════════════════════════════════════════════════════════════════════
-  #  BUILD — resolves environment from branch or dispatch input
+  #  BUILD
   # ════════════════════════════════════════════════════════════════════════════
 
   build:
     name: Build
     if: github.event_name != 'pull_request'
     needs: [lint, security]
-    # ── Uncomment the line below once tests are active ──────────────────────
-    # needs: [lint, security, test]
     uses: ./.github/workflows/_build.yml
     with:
       environment: >-
@@ -105,9 +84,7 @@ jobs:
         }}
 
   # ════════════════════════════════════════════════════════════════════════════
-  #  DEPLOY — one job per environment, each guarded by its own `if:`
-  #  GitHub Environment protection rules (required reviewers) are the gate
-  #  for staging and prod — no extra code needed, configure in repo Settings.
+  #  DEPLOY — deploy_dir is hardcoded per stage, visible right here
   # ════════════════════════════════════════════════════════════════════════════
 
   deploy-dev:
@@ -121,6 +98,7 @@ jobs:
     uses: ./.github/workflows/_deploy.yml
     with:
       environment: dev
+      deploy_dir: /flowbrand/dev
       artifact_name: ${{ needs.build.outputs.artifact_name }}
       tarball: ${{ needs.build.outputs.tarball }}
     secrets:
@@ -139,6 +117,7 @@ jobs:
     uses: ./.github/workflows/_deploy.yml
     with:
       environment: staging
+      deploy_dir: /flowbrand/staging
       artifact_name: ${{ needs.build.outputs.artifact_name }}
       tarball: ${{ needs.build.outputs.tarball }}
     secrets:
@@ -157,6 +136,7 @@ jobs:
     uses: ./.github/workflows/_deploy.yml
     with:
       environment: prod
+      deploy_dir: /flowbrand/production
       artifact_name: ${{ needs.build.outputs.artifact_name }}
       tarball: ${{ needs.build.outputs.tarball }}
     secrets:

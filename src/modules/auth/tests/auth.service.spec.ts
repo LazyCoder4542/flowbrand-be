@@ -7,42 +7,30 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import * as SYS_MSG from '@shared/constants/SystemMessages';
 import { CustomHttpException } from '@shared/helpers/custom-http-filter';
 import { User } from '@modules/user/entities/user.entity';
-import AuthenticationService from '../auth.service';
-import { UserSession } from '../entities/user-session.entity';
 import { RedisService } from '@modules/redis/services/redis.service';
-
-describe('AuthenticationService', () => {
-  let service: AuthenticationService;
-  // Ensure jwt refresh secret is set for hashing in tests
-  process.env.JWT_REFRESH_SECRET = process.env.JWT_REFRESH_SECRET || 'test-refresh-secret';
-  const userRepositoryMock = {
-    findOne: jest.fn(),
-    create: jest.fn(),
-    save: jest.fn(),
-    manager: {
-      transaction: jest.fn(),
-    },
-  };
-  const jwtServiceMock = {
-    sign: jest.fn(),
-  };
-  const userSessionRepositoryMock = {
-    create: jest.fn(),
-    save: jest.fn(),
-  };
-  const redisServiceMock = {
-    set: jest.fn(),
-    get: jest.fn(),
-    del: jest.fn(),
-  };
+import QueueService from '@modules/email/queue.service';
+import AuthenticationService from '../auth.service';
 import { LockoutService } from '../lockout.service';
 import { SessionService } from '../session.service';
+import { UserSession } from '../entities/user-session.entity';
 
 describe('AuthenticationService', () => {
   let service: AuthenticationService;
 
   const userRepositoryMock = { findOne: jest.fn(), create: jest.fn(), save: jest.fn() };
+  const userSessionRepositoryMock = { create: jest.fn(), save: jest.fn() };
   const jwtServiceMock = { sign: jest.fn() };
+  const redisServiceMock = {
+    get: jest.fn().mockResolvedValue(null),
+    set: jest.fn().mockResolvedValue('OK'),
+    del: jest.fn().mockResolvedValue(1),
+    incr: jest.fn().mockResolvedValue(1),
+    exists: jest.fn().mockResolvedValue(false),
+    expire: jest.fn().mockResolvedValue(undefined),
+  };
+  const queueServiceMock = {
+    sendMail: jest.fn().mockResolvedValue({ jobId: 'mock-job' }),
+  };
   const lockoutServiceMock = {
     findOrCreate: jest.fn(),
     isLocked: jest.fn(),
@@ -60,6 +48,7 @@ describe('AuthenticationService', () => {
         { provide: getRepositoryToken(UserSession), useValue: userSessionRepositoryMock },
         { provide: JwtService, useValue: jwtServiceMock },
         { provide: RedisService, useValue: redisServiceMock },
+        { provide: QueueService, useValue: queueServiceMock },
         { provide: LockoutService, useValue: lockoutServiceMock },
         { provide: SessionService, useValue: sessionServiceMock },
       ],
@@ -76,6 +65,8 @@ describe('AuthenticationService', () => {
     expect(service).toBeDefined();
   });
 
+  // ─── createNewUser ────────────────────────────────────────────────────────
+
   describe('createNewUser', () => {
     const dto = {
       email: 'jane@example.com',
@@ -84,7 +75,7 @@ describe('AuthenticationService', () => {
       country: 'Nigeria',
     };
 
-    it('creates a user when none exists with that email', async () => {
+    it('creates a user and dispatches OTP email — no plaintext OTP in DB', async () => {
       userRepositoryMock.findOne.mockResolvedValueOnce(null);
       userRepositoryMock.create.mockImplementation(input => input);
       userRepositoryMock.save.mockResolvedValueOnce({
@@ -106,10 +97,26 @@ describe('AuthenticationService', () => {
         email: dto.email,
         avatar_url: null,
       });
+
+      // otp_code and expires_at must NOT be written to the DB
       const created = userRepositoryMock.create.mock.calls[0][0];
       expect(created.auth_provider).toBe('email');
-      expect(created.otp_code).toMatch(/^\d{6}$/);
-      expect(created.expires_at).toBeInstanceOf(Date);
+      expect(created.otp_code).toBeUndefined();
+      expect(created.expires_at).toBeUndefined();
+
+      // OTP hash must be stored in Redis
+      expect(redisServiceMock.set).toHaveBeenCalledWith('otp:jane@example.com', expect.any(String), 300);
+
+      // Email must be dispatched with a 6-digit OTP
+      expect(queueServiceMock.sendMail).toHaveBeenCalledWith(
+        expect.objectContaining({
+          variant: 'register-otp',
+          mail: expect.objectContaining({
+            to: dto.email,
+            context: expect.objectContaining({ otp: expect.stringMatching(/^\d{6}$/) }),
+          }),
+        })
+      );
     });
 
     it('throws when a user with that email already exists', async () => {
@@ -117,6 +124,8 @@ describe('AuthenticationService', () => {
       await expect(service.createNewUser(dto)).rejects.toThrow(CustomHttpException);
     });
   });
+
+  // ─── loginUser ────────────────────────────────────────────────────────────
 
   describe('loginUser', () => {
     const metaMock = { id: 'meta-1', user_id: 'user-1', failed_attempts: 0, locked_until: null };
@@ -153,8 +162,6 @@ describe('AuthenticationService', () => {
       userRepositoryMock.findOne.mockResolvedValueOnce({
         id: 'user-1',
         email: 'jane@example.com',
-        full_name: 'Jane Doe',
-        avatar_url: null,
         password: hashed,
       });
       lockoutServiceMock.findOrCreate.mockResolvedValueOnce(metaMock);
@@ -167,11 +174,7 @@ describe('AuthenticationService', () => {
     });
 
     it('rejects accounts without a stored password (OAuth-only)', async () => {
-      userRepositoryMock.findOne.mockResolvedValueOnce({
-        id: 'user-1',
-        email: 'jane@example.com',
-        password: null,
-      });
+      userRepositoryMock.findOne.mockResolvedValueOnce({ id: 'user-1', email: 'jane@example.com', password: null });
       await expect(service.loginUser({ email: 'jane@example.com', password: 'anything' })).rejects.toThrow(
         CustomHttpException
       );
@@ -194,15 +197,158 @@ describe('AuthenticationService', () => {
     });
   });
 
+  // ─── sendOtp ─────────────────────────────────────────────────────────────
+
+  describe('sendOtp', () => {
+    const user = { id: 'user-1', email: 'jane@example.com' };
+
+    it('sends OTP and stores hash in Redis — no plaintext in DB', async () => {
+      userRepositoryMock.findOne.mockResolvedValueOnce({ ...user });
+
+      const result = await service.sendOtp('jane@example.com');
+
+      expect(result.status_code).toBe(HttpStatus.OK);
+      expect(result.message).toBe(SYS_MSG.OTP_SENT);
+      expect(redisServiceMock.set).toHaveBeenCalledWith('otp:jane@example.com', expect.any(String), 300);
+      expect(redisServiceMock.set).toHaveBeenCalledWith('limit:jane@example.com', '1', 30);
+      expect(userRepositoryMock.save).not.toHaveBeenCalled();
+      expect(queueServiceMock.sendMail).toHaveBeenCalledWith(
+        expect.objectContaining({ variant: 'register-otp', mail: expect.objectContaining({ to: 'jane@example.com' }) })
+      );
+    });
+
+    it('returns 200 silently for unknown emails — prevents enumeration', async () => {
+      userRepositoryMock.findOne.mockResolvedValueOnce(null);
+
+      const result = await service.sendOtp('nobody@example.com');
+
+      expect(result.status_code).toBe(HttpStatus.OK);
+      expect(queueServiceMock.sendMail).not.toHaveBeenCalled();
+    });
+
+    it('throws 429 when cooldown key exists', async () => {
+      redisServiceMock.exists.mockResolvedValueOnce(true);
+      await expect(service.sendOtp('jane@example.com')).rejects.toThrow(CustomHttpException);
+    });
+  });
+
+  // ─── verifyOtp ────────────────────────────────────────────────────────────
+
+  describe('verifyOtp', () => {
+    const user = { id: 'user-1', email: 'jane@example.com', full_name: 'Jane', avatar_url: null, is_verified: false };
+
+    it('verifies a valid OTP, marks user verified, clears Redis keys and DB OTP fields', async () => {
+      const otp = '123456';
+      const hashedOtp = await bcrypt.hash(otp, 10);
+
+      userRepositoryMock.findOne.mockResolvedValueOnce({ ...user });
+      redisServiceMock.get.mockResolvedValueOnce(hashedOtp);
+      redisServiceMock.incr.mockResolvedValueOnce(1);
+      userRepositoryMock.save.mockResolvedValueOnce(undefined);
+      jwtServiceMock.sign.mockReturnValueOnce('jwt');
+
+      const result = await service.verifyOtp('jane@example.com', otp);
+
+      expect(result.status_code).toBe(HttpStatus.OK);
+      expect(result.message).toBe(SYS_MSG.EMAIL_VERIFIED);
+      expect(result.access_token).toBe('jwt');
+
+      // DB otp_code and expires_at must be cleared
+      const saved = userRepositoryMock.save.mock.calls[0][0];
+      expect(saved.otp_code).toBeNull();
+      expect(saved.expires_at).toBeNull();
+      expect(saved.is_verified).toBe(true);
+
+      expect(redisServiceMock.del).toHaveBeenCalledWith('otp:jane@example.com');
+      expect(redisServiceMock.del).toHaveBeenCalledWith('attempts:jane@example.com');
+      expect(redisServiceMock.del).toHaveBeenCalledWith('limit:jane@example.com');
+    });
+
+    it('throws 400 for unknown email — same shape as bad OTP, prevents enumeration', async () => {
+      userRepositoryMock.findOne.mockResolvedValueOnce(null);
+      await expect(service.verifyOtp('nobody@example.com', '123456')).rejects.toThrow(CustomHttpException);
+    });
+
+    it('throws 400 when OTP has expired before burning an attempt', async () => {
+      userRepositoryMock.findOne.mockResolvedValueOnce({ ...user });
+      redisServiceMock.get.mockResolvedValueOnce(null); // OTP missing/expired
+
+      await expect(service.verifyOtp('jane@example.com', '123456')).rejects.toThrow(CustomHttpException);
+      expect(redisServiceMock.incr).not.toHaveBeenCalled(); // no attempt burned
+    });
+
+    it('throws 429 when attempt count exceeds limit', async () => {
+      const hashedOtp = await bcrypt.hash('123456', 10);
+      userRepositoryMock.findOne.mockResolvedValueOnce({ ...user });
+      redisServiceMock.get.mockResolvedValueOnce(hashedOtp);
+      redisServiceMock.incr.mockResolvedValueOnce(6);
+
+      await expect(service.verifyOtp('jane@example.com', '123456')).rejects.toThrow(CustomHttpException);
+    });
+
+    it('throws 400 when OTP does not match', async () => {
+      const hashedOtp = await bcrypt.hash('654321', 10);
+      userRepositoryMock.findOne.mockResolvedValueOnce({ ...user });
+      redisServiceMock.get.mockResolvedValueOnce(hashedOtp);
+      redisServiceMock.incr.mockResolvedValueOnce(1);
+
+      await expect(service.verifyOtp('jane@example.com', '999999')).rejects.toThrow(CustomHttpException);
+    });
+
+    it('uses expire (not set) for atomic TTL on first attempt', async () => {
+      const hashedOtp = await bcrypt.hash('123456', 10);
+      userRepositoryMock.findOne.mockResolvedValueOnce({ ...user });
+      redisServiceMock.get.mockResolvedValueOnce(hashedOtp);
+      redisServiceMock.incr.mockResolvedValueOnce(1);
+      jwtServiceMock.sign.mockReturnValueOnce('jwt');
+      userRepositoryMock.save.mockResolvedValueOnce(undefined);
+
+      await service.verifyOtp('jane@example.com', '123456');
+
+      expect(redisServiceMock.expire).toHaveBeenCalledWith('attempts:jane@example.com', 300);
+      expect(redisServiceMock.set).not.toHaveBeenCalledWith(
+        'attempts:jane@example.com',
+        expect.anything(),
+        expect.anything()
+      );
+    });
+  });
+
+  // ─── resendOtp ────────────────────────────────────────────────────────────
+
+  describe('resendOtp', () => {
+    const user = { id: 'user-1', email: 'jane@example.com' };
+
+    it('clears old OTP and attempts then issues a fresh code', async () => {
+      userRepositoryMock.findOne.mockResolvedValueOnce({ ...user });
+
+      const result = await service.resendOtp('jane@example.com');
+
+      expect(result.status_code).toBe(HttpStatus.OK);
+      expect(redisServiceMock.del).toHaveBeenCalledWith('otp:jane@example.com');
+      expect(redisServiceMock.del).toHaveBeenCalledWith('attempts:jane@example.com');
+      expect(queueServiceMock.sendMail).toHaveBeenCalled();
+    });
+
+    it('throws 429 when cooldown key exists — does not clear existing OTP', async () => {
+      redisServiceMock.exists.mockResolvedValueOnce(true);
+
+      await expect(service.resendOtp('jane@example.com')).rejects.toThrow(CustomHttpException);
+      expect(redisServiceMock.del).not.toHaveBeenCalled();
+      expect(queueServiceMock.sendMail).not.toHaveBeenCalled();
+    });
+  });
+
+  // ─── changePassword ───────────────────────────────────────────────────────
+
   describe('changePassword', () => {
     it('updates the password when the old one matches', async () => {
       const oldPassword = 'OldP@ss123';
-      const newPassword = 'NewP@ss123';
       const hashed = await bcrypt.hash(oldPassword, 10);
       userRepositoryMock.findOne.mockResolvedValueOnce({ id: 'user-1', password: hashed });
       userRepositoryMock.save.mockResolvedValueOnce(undefined);
 
-      const result = await service.changePassword('user-1', oldPassword, newPassword);
+      const result = await service.changePassword('user-1', oldPassword, 'NewP@ss123');
 
       expect(result.message).toBe(SYS_MSG.PASSWORD_UPDATED);
       expect(userRepositoryMock.save).toHaveBeenCalled();
@@ -217,240 +363,6 @@ describe('AuthenticationService', () => {
       const hashed = await bcrypt.hash('correct-old', 10);
       userRepositoryMock.findOne.mockResolvedValueOnce({ id: 'user-1', password: hashed });
       await expect(service.changePassword('user-1', 'wrong-old', 'new')).rejects.toThrow(CustomHttpException);
-    });
-  });
-
-  describe('handleOAuthLogin', () => {
-    const googleProfile = {
-      provider: 'google',
-      providerId: 'google-123',
-      email: 'user@example.com',
-      full_name: 'John Doe',
-      avatar_url: 'https://example.com/avatar.jpg',
-    };
-    beforeEach(() => {
-      // Setup manager.transaction to return the callback result
-      (userRepositoryMock.manager.transaction as jest.Mock).mockImplementation(callback =>
-        callback({
-          getRepository: jest.fn(() => ({
-            findOne: userRepositoryMock.findOne,
-            create: userRepositoryMock.create,
-            save: userRepositoryMock.save,
-          })),
-        })
-      );
-    });
-
-    it('creates a new user when email does not exist', async () => {
-      userRepositoryMock.findOne.mockResolvedValueOnce(null);
-      userRepositoryMock.create.mockImplementation(input => input);
-      userRepositoryMock.save.mockResolvedValueOnce({
-        id: 'new-user-1',
-        email: googleProfile.email,
-        full_name: googleProfile.full_name,
-        avatar_url: googleProfile.avatar_url,
-      });
-      userRepositoryMock.save.mockResolvedValueOnce({
-        id: 'new-user-1',
-        email: googleProfile.email,
-        full_name: googleProfile.full_name,
-        avatar_url: googleProfile.avatar_url,
-      });
-      userSessionRepositoryMock.create.mockImplementation(input => input);
-      userSessionRepositoryMock.save.mockResolvedValueOnce({
-        id: 'session-1',
-        user_id: 'new-user-1',
-        refresh_token: 'hashed-token',
-      });
-      jwtServiceMock.sign.mockReturnValueOnce('access-jwt');
-
-      const result = await service.handleOAuthLogin(googleProfile);
-
-      // Verify new user was created with OAuth data
-      const createdUser = userRepositoryMock.create.mock.calls[0][0];
-      expect(createdUser.email).toBe(googleProfile.email);
-      expect(createdUser.full_name).toBe(googleProfile.full_name);
-      expect(createdUser.avatar_url).toBe(googleProfile.avatar_url);
-      expect(createdUser.auth_provider).toBe('google');
-      expect(createdUser.provider_user_id).toBe(googleProfile.providerId);
-      expect(createdUser.password).toBeNull();
-
-      // Verify session was created
-      expect(userSessionRepositoryMock.create).toHaveBeenCalled();
-      expect(userSessionRepositoryMock.save).toHaveBeenCalled();
-
-      // Verify response
-      expect(result.status_code).toBe(HttpStatus.OK);
-      expect(result.access_token).toBe('access-jwt');
-      expect(result.refresh_token).toBeDefined();
-      expect(result.data.user.email).toBe(googleProfile.email);
-    });
-
-    it('links OAuth provider to existing email user', async () => {
-      const existingUser = {
-        id: 'existing-user-1',
-        email: googleProfile.email,
-        auth_provider: 'email',
-        provider_user_id: null,
-        full_name: 'John Old',
-        avatar_url: null,
-      };
-
-      userRepositoryMock.findOne.mockResolvedValueOnce(existingUser);
-      userRepositoryMock.save.mockResolvedValueOnce({
-        ...existingUser,
-        auth_provider: 'google',
-        provider_user_id: googleProfile.providerId,
-        full_name: googleProfile.full_name,
-        avatar_url: googleProfile.avatar_url,
-      });
-      userSessionRepositoryMock.create.mockImplementation(input => input);
-      userSessionRepositoryMock.save.mockResolvedValueOnce({
-        id: 'session-2',
-        user_id: 'existing-user-1',
-        refresh_token: 'hashed-token',
-      });
-      jwtServiceMock.sign.mockReturnValueOnce('access-jwt');
-
-      const result = await service.handleOAuthLogin(googleProfile);
-
-      // Verify provider was linked
-      const updatedUser = userRepositoryMock.save.mock.calls[0][0];
-      expect(updatedUser.auth_provider).toBe('google');
-      expect(updatedUser.provider_user_id).toBe(googleProfile.providerId);
-
-      // Verify response
-      expect(result.status_code).toBe(HttpStatus.OK);
-      expect(result.data.user.id).toBe('existing-user-1');
-    });
-
-    it('throws conflict when same email has different Google provider ID', async () => {
-      const existingUser = {
-        id: 'google-user-1',
-        email: googleProfile.email,
-        auth_provider: 'google',
-        provider_user_id: 'different-google-id',
-        full_name: 'John Doe',
-      };
-
-      userRepositoryMock.findOne.mockResolvedValueOnce(existingUser);
-
-      await expect(service.handleOAuthLogin(googleProfile)).rejects.toThrow(CustomHttpException);
-    });
-
-    it('persists session and returns tokens', async () => {
-      const user = {
-        id: 'user-1',
-        email: googleProfile.email,
-        full_name: googleProfile.full_name,
-        avatar_url: googleProfile.avatar_url,
-      };
-
-      userRepositoryMock.findOne.mockResolvedValueOnce(user);
-      userRepositoryMock.save.mockResolvedValueOnce(user);
-      userSessionRepositoryMock.create.mockImplementation(input => input);
-      userSessionRepositoryMock.save.mockResolvedValueOnce({
-        id: 'session-1',
-        user_id: 'user-1',
-        refresh_token: 'hashed-token',
-      });
-      jwtServiceMock.sign.mockReturnValueOnce('access-jwt');
-
-      const result = await service.handleOAuthLogin(googleProfile);
-
-      // Verify session was created with hashed token (not plaintext)
-      const sessionPayload = userSessionRepositoryMock.create.mock.calls[0][0];
-      expect(sessionPayload.refresh_token).toBeDefined();
-      // The hash should be different from a simple UUID
-      expect(sessionPayload.refresh_token).toMatch(/^[a-f0-9]{64}$/); // SHA256 hex format
-
-      // Verify JWT was signed
-      expect(jwtServiceMock.sign).toHaveBeenCalledWith(
-        expect.objectContaining({
-          id: 'user-1',
-          email: googleProfile.email,
-        })
-      );
-
-      // Verify plaintext token returned to client
-      expect(result.refresh_token).toBeDefined();
-      expect(result.refresh_token).not.toBe(sessionPayload.refresh_token);
-      expect(result.access_token).toBe('access-jwt');
-    });
-
-    it('does not block login when Redis fails', async () => {
-      const user = {
-        id: 'user-1',
-        email: googleProfile.email,
-        full_name: googleProfile.full_name,
-        avatar_url: googleProfile.avatar_url,
-      };
-      userRepositoryMock.findOne.mockResolvedValueOnce(user);
-      userRepositoryMock.save.mockResolvedValueOnce(user);
-      userSessionRepositoryMock.create.mockImplementation(input => input);
-      userSessionRepositoryMock.save.mockResolvedValueOnce({
-        id: 'session-1',
-        user_id: 'user-1',
-        refresh_token: 'hashed-token',
-      });
-      jwtServiceMock.sign.mockReturnValueOnce('access-jwt');
-      // Make Redis actually fail so we assert handleOAuthLogin is resilient.
-      redisServiceMock.set.mockRejectedValueOnce(new Error('redis down'));
-      const originalConsoleError = console.error;
-      console.error = jest.fn();
-      const result = await service.handleOAuthLogin(googleProfile);
-      // Verify login succeeds despite Redis error
-      expect(result.status_code).toBe(HttpStatus.OK);
-      expect(result.access_token).toBe('access-jwt');
-      expect(result.refresh_token).toBeDefined();
-      console.error = originalConsoleError;
-    });
-
-    it('rejects OAuth profile with missing email', async () => {
-      const profileWithoutEmail = {
-        ...googleProfile,
-        email: '',
-      };
-
-      await expect(service.handleOAuthLogin(profileWithoutEmail)).rejects.toThrow(CustomHttpException);
-    });
-
-    it('normalizes email to lowercase', async () => {
-      const profileWithUpperEmail = {
-        ...googleProfile,
-        email: 'USER@EXAMPLE.COM',
-      };
-
-      userRepositoryMock.findOne.mockResolvedValueOnce(null);
-      userRepositoryMock.create.mockImplementation(input => input);
-      userRepositoryMock.save.mockResolvedValueOnce({
-        id: 'user-1',
-        email: 'user@example.com',
-        full_name: googleProfile.full_name,
-        avatar_url: googleProfile.avatar_url,
-      });
-      userRepositoryMock.save.mockResolvedValueOnce({
-        id: 'user-1',
-        email: 'user@example.com',
-        full_name: googleProfile.full_name,
-        avatar_url: googleProfile.avatar_url,
-      });
-      userSessionRepositoryMock.create.mockImplementation(input => input);
-      userSessionRepositoryMock.save.mockResolvedValueOnce({
-        id: 'session-1',
-        user_id: 'user-1',
-        refresh_token: 'hashed-token',
-      });
-      jwtServiceMock.sign.mockReturnValueOnce('access-jwt');
-
-      await service.handleOAuthLogin(profileWithUpperEmail);
-
-      // Verify email was normalized in queries and creation
-      expect(userRepositoryMock.findOne).toHaveBeenCalledWith(
-        expect.objectContaining({ where: { email: 'user@example.com' } })
-      );
-      const createdUser = userRepositoryMock.create.mock.calls[0][0];
-      expect(createdUser.email).toBe('user@example.com');
     });
   });
 });

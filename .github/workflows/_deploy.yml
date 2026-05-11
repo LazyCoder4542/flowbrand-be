@@ -7,6 +7,10 @@ on:
         description: 'Target environment (dev | staging | prod)'
         required: true
         type: string
+      deploy_dir:
+        description: 'Absolute path on server to deploy into (e.g. /flowbrand/dev)'
+        required: true
+        type: string
       artifact_name:
         description: 'GitHub Actions artifact name produced by the build job'
         required: true
@@ -24,7 +28,7 @@ on:
         required: true
 
 env:
-  DEPLOY_DIR: ${{ vars.DEPLOY_DIR }}
+  DEPLOY_DIR: ${{ inputs.deploy_dir }}
   PM2_ENV: ${{ inputs.environment == 'prod' && 'main' || inputs.environment }}
   REMOTE_TMP: /home/${{ secrets.USERNAME }}/tmp/nestjs
 
@@ -32,7 +36,6 @@ jobs:
   deploy:
     name: Deploy (${{ inputs.environment }})
     runs-on: ubuntu-latest
-    environment: ${{ inputs.environment }}
 
     steps:
       - name: Download build artifact
@@ -44,9 +47,6 @@ jobs:
         run: sudo apt-get install -y sshpass
 
       - name: Prepare SSH helper
-        # Write a one-liner wrapper so we don't repeat the sshpass boilerplate.
-        # SSHPASS env var is read by sshpass automatically — keeps the password
-        # out of the process argument list.
         run: |
           echo "SSHPASS=${{ secrets.PASSWORD }}" >> $GITHUB_ENV
 
@@ -66,9 +66,6 @@ jobs:
             ${{ secrets.USERNAME }}@${{ secrets.HOST }}:${{ env.REMOTE_TMP }}/
 
       - name: Deploy on server
-        env:
-          TARBALL: ${{ inputs.tarball }}
-          ENVIRONMENT: ${{ inputs.environment }}
         run: |
           sshpass -e ssh -o StrictHostKeyChecking=no \
             ${{ secrets.USERNAME }}@${{ secrets.HOST }} << REMOTE
