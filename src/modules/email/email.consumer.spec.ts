@@ -147,7 +147,7 @@ describe('EmailQueueConsumer', () => {
 
     expect(mailerService.sendMail).toHaveBeenCalledWith({
       to: 'test@example.com',
-      subject: 'Welcome to My App! Confirm your Email',
+      subject: 'Verify your FlowBrand account',
       template: 'register-otp',
     });
 

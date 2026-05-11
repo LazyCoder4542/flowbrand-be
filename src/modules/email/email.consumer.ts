@@ -104,7 +104,7 @@ export default class EmailQueueConsumer {
       } = job;
       await this.mailerService.sendMail({
         ...mail,
-        subject: 'Welcome to My App! Confirm your Email',
+        subject: 'Verify your FlowBrand account',
         template: 'register-otp',
       });
       this.logger.log(`Register OTP email sent successfully to ${this.maskEmail(mail.to)}`);

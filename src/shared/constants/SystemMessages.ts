@@ -4,6 +4,7 @@ export const FAILED_TO_CREATE_USER = 'Error Occured while creating user, kindly 
 export const ERROR_OCCURED = 'Error Occured Performing this request';
 export const USER_ACCOUNT_EXIST = 'Account with the specified email exists';
 export const USER_ACCOUNT_DOES_NOT_EXIST = "Account with the specified email doesn't exist";
+export const USER_ACCOUNT_LOCKED = 'Account with the specified email is locked';
 export const UNAUTHENTICATED_MESSAGE = 'User is currently unauthorized, kindly authenticate to continue';
 export const TWO_FACTOR_VERIFIED_SUCCESSFULLY = '2FA verified and enabled';
 export const ANALYTICS_FETCHED_SUCCESSFULLY = 'Admin Analytics fetched successfully';
@@ -30,7 +31,15 @@ export const TIMEZONE_ALREADY_EXISTS = 'Timezone already exists';
 export const INVALID_CREDENTIALS = 'Invalid credentials';
 export const LOGIN_SUCCESSFUL = 'Login successful';
 export const LOGIN_ERROR = 'An error occurred during login';
+export const ACCOUNT_LOCKED = 'Account locked. Please try again later.';
+export const ACCOUNT_LOCKED_SECONDS = (seconds: number) => `Account locked. Try again in ${seconds} seconds.`;
 export const EMAIL_SENT = 'Email sent successfully';
+export const OTP_SENT = 'OTP sent successfully';
+export const EMAIL_VERIFIED = 'Email verified successfully';
+export const OTP_COOLDOWN = 'Please wait before requesting another OTP';
+export const TOO_MANY_OTP_ATTEMPTS = 'Too many attempts. Please request a new OTP.';
+export const OTP_EXPIRED = 'OTP has expired or does not exist';
+export const INVALID_OTP = 'Invalid OTP';
 export const ENABLE_2FA_ERROR = 'Error occured enabling 2fa';
 export const ALREADY_ENABLED_2FA = '2FA already enabled on your account';
 export const SIGN_IN_OTP_SENT = 'Sign-in token sent to email';
@@ -117,7 +126,6 @@ export const TOPIC_NOT_FOUND = `Help center topic with ID not found`;
 export const TOPIC_UPDATE_SUCCESS = 'Topic updated successfully';
 export const TOPIC_DELETED = 'Topic deleted successfully';
 export const BILLING_PLAN_NOT_FOUND = 'Billing plan not found';
-
 export const REDIS_MESSAGES = {
   CONNECT_SUCCESS: 'Redis connection established',
   CLIENT_READY: 'Redis client ready',
@@ -131,3 +139,10 @@ export const REDIS_MESSAGES = {
   PATTERN_DELETE_SUCCESS: (count: number, pattern: string) =>
     `delByPattern: deleted ${count} keys matching [${pattern}]`,
 };
+export const GOOGLE_ACCOUNT_NO_EMAIL = 'Google account has no email';
+export const GOOGLE_ACCOUNT_LINK_CONFLICT = 'Google account is linked to a different auth provider';
+export const GOOGLE_OAUTH_FAILED = 'Google OAuth authentication failed';
+export const USER_OAUTH_CREATION_FAILED = 'Failed to create user account';
+export const OAUTH_LOGIN_SUCCESSFUL = 'OAuth login successful';
+export const TERMS_AND_CONDITIONS = 'You must accept the terms and conditions to register';
+export const SESSION_CREATION_FAILED = 'Registration failed. Please try again';

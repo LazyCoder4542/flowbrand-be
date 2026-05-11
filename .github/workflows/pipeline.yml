@@ -1,0 +1,145 @@
+name: Pipeline
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  DEPLOY DIRECTORY MAP  (edit here when server paths change)
+#
+#    dev     → /flowbrand/dev
+#    staging → /flowbrand/staging
+#    prod    → /flowbrand/production
+# ══════════════════════════════════════════════════════════════════════════════
+
+on:
+  push:
+    branches:
+      - dev
+      - staging
+      - main
+
+  pull_request:
+    branches:
+      - dev
+      - staging
+      - main
+
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy'
+        required: true
+        type: choice
+        options: [dev, staging, prod]
+
+concurrency:
+  group: pipeline-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ════════════════════════════════════════════════════════════════════════════
+  #  PULL REQUEST GATE — validate only, never deploy
+  # ════════════════════════════════════════════════════════════════════════════
+
+  lint-pr:
+    name: Lint (PR)
+    if: github.event_name == 'pull_request'
+    uses: ./.github/workflows/_lint.yml
+
+  build-pr:
+    name: Build (PR)
+    if: github.event_name == 'pull_request'
+    needs: lint-pr
+    uses: ./.github/workflows/_build.yml
+    with:
+      environment: dev
+
+  # ════════════════════════════════════════════════════════════════════════════
+  #  SHARED GATES — lint + security run before every non-PR deploy
+  # ════════════════════════════════════════════════════════════════════════════
+
+  lint:
+    name: Lint
+    if: github.event_name != 'pull_request'
+    uses: ./.github/workflows/_lint.yml
+
+  security:
+    name: Security
+    if: github.event_name != 'pull_request'
+    uses: ./.github/workflows/_security.yml
+
+  # ════════════════════════════════════════════════════════════════════════════
+  #  BUILD
+  # ════════════════════════════════════════════════════════════════════════════
+
+  build:
+    name: Build
+    if: github.event_name != 'pull_request'
+    needs: [lint, security]
+    uses: ./.github/workflows/_build.yml
+    with:
+      environment: >-
+        ${{
+          github.event_name == 'workflow_dispatch' && inputs.environment ||
+          github.ref == 'refs/heads/main'    && 'prod'    ||
+          github.ref == 'refs/heads/staging' && 'staging' ||
+          'dev'
+        }}
+
+  # ════════════════════════════════════════════════════════════════════════════
+  #  DEPLOY — deploy_dir is hardcoded per stage, visible right here
+  # ════════════════════════════════════════════════════════════════════════════
+
+  deploy-dev:
+    name: Deploy → dev
+    if: |
+      github.event_name != 'pull_request' && (
+        (github.event_name == 'push'              && github.ref == 'refs/heads/dev') ||
+        (github.event_name == 'workflow_dispatch' && inputs.environment == 'dev')
+      )
+    needs: build
+    uses: ./.github/workflows/_deploy.yml
+    with:
+      environment: dev
+      deploy_dir: /flowbrand/dev
+      artifact_name: ${{ needs.build.outputs.artifact_name }}
+      tarball: ${{ needs.build.outputs.tarball }}
+    secrets:
+      HOST: ${{ secrets.HOST }}
+      USERNAME: ${{ secrets.USERNAME }}
+      PASSWORD: ${{ secrets.PASSWORD }}
+
+  deploy-staging:
+    name: Deploy → staging
+    if: |
+      github.event_name != 'pull_request' && (
+        (github.event_name == 'push'              && github.ref == 'refs/heads/staging') ||
+        (github.event_name == 'workflow_dispatch' && inputs.environment == 'staging')
+      )
+    needs: build
+    uses: ./.github/workflows/_deploy.yml
+    with:
+      environment: staging
+      deploy_dir: /flowbrand/staging
+      artifact_name: ${{ needs.build.outputs.artifact_name }}
+      tarball: ${{ needs.build.outputs.tarball }}
+    secrets:
+      HOST: ${{ secrets.HOST }}
+      USERNAME: ${{ secrets.USERNAME }}
+      PASSWORD: ${{ secrets.PASSWORD }}
+
+  deploy-prod:
+    name: Deploy → prod
+    if: |
+      github.event_name != 'pull_request' && (
+        (github.event_name == 'push'              && github.ref == 'refs/heads/main') ||
+        (github.event_name == 'workflow_dispatch' && inputs.environment == 'prod')
+      )
+    needs: build
+    uses: ./.github/workflows/_deploy.yml
+    with:
+      environment: prod
+      deploy_dir: /flowbrand/production
+      artifact_name: ${{ needs.build.outputs.artifact_name }}
+      tarball: ${{ needs.build.outputs.tarball }}
+    secrets:
+      HOST: ${{ secrets.HOST }}
+      USERNAME: ${{ secrets.USERNAME }}
+      PASSWORD: ${{ secrets.PASSWORD }}

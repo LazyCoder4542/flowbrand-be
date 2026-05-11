@@ -164,8 +164,6 @@ export class EmailService {
 
   async updateTemplate(templateName: string, templateInfo: UpdateTemplateDto) {
     const html = Handlebars.compile(templateInfo.template)({});
-    this.htmlValidator.validateString(html);
-
     const validationResult = await this.htmlValidator.validateString(html);
 
     const filteredMessages = validationResult.results[0].messages.filter(
