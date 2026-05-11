@@ -1,7 +1,7 @@
-import { HttpStatus, Injectable } from '@nestjs/common';
+import { HttpStatus, Injectable, Logger } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { DataSource, Repository } from 'typeorm';
 import * as bcrypt from 'bcrypt';
 import { randomInt } from 'crypto';
 import authConfig from '@config/auth.config';
@@ -10,7 +10,9 @@ import { CustomHttpException } from '@shared/helpers/custom-http-filter';
 import { User } from '@modules/user/entities/user.entity';
 import { CreateUserDTO } from './dto/create-user.dto';
 import { LoginDto } from './dto/login.dto';
+import { UserSession } from './entities/user-session.entity';
 import { RedisService } from '@modules/redis/services/redis.service';
+import { AuthMetadata } from './entities/auth-metadata.entity';
 import QueueService from '@modules/email/queue.service';
 import { LockoutService } from './lockout.service';
 import { SessionService } from './session.service';
@@ -22,6 +24,8 @@ const MAX_OTP_ATTEMPTS = 5;
 
 @Injectable()
 export default class AuthenticationService {
+  private readonly logger = new Logger(AuthenticationService.name);
+
   constructor(
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
@@ -29,7 +33,15 @@ export default class AuthenticationService {
     private readonly redisService: RedisService,
     private readonly queueService: QueueService,
     private readonly lockoutService: LockoutService,
-    private readonly sessionService: SessionService
+    private readonly sessionService: SessionService,
+
+    @InjectRepository(UserSession)
+    private readonly userSessionRepository: Repository<UserSession>,
+
+    @InjectRepository(AuthMetadata)
+    private readonly authMetaData: Repository<AuthMetadata>,
+
+    private readonly dataSource: DataSource,
   ) { }
 
   async createNewUser(createUserDto: CreateUserDTO) {
@@ -39,25 +51,65 @@ export default class AuthenticationService {
     }
 
     const hashedPassword = await bcrypt.hash(createUserDto.password, 10);
-    const saved = await this.userRepository.save(
-      this.userRepository.create({
+
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+
+    let saved: User;
+
+    try {
+      const user = queryRunner.manager.create(User, {
         email: createUserDto.email,
         full_name: createUserDto.full_name,
         country: createUserDto.country ?? null,
         password: hashedPassword,
         auth_provider: 'email',
-      })
-    );
+        terms_accepted: createUserDto.terms_accepted,
+      });
 
-    await this.issueOtp(saved.email);
+      saved = await queryRunner.manager.save(user);
 
-    const access_token = this.jwtService.sign({ id: saved.id, sub: saved.id, email: saved.email });
+      const authMetaData = queryRunner.manager.create(AuthMetadata, {
+        user_id: saved.id,
+        last_login_at: null,
+      });
+      await queryRunner.manager.save(authMetaData);
+
+      await queryRunner.commitTransaction();
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+
+      const err = error as Error;
+      this.logger.error(`Registration failed: ${err.message}`, err.stack);
+
+      let errorMessage = SYS_MSG.SESSION_CREATION_FAILED;
+      const statusCode = HttpStatus.INTERNAL_SERVER_ERROR;
+
+      if (err.name === 'QueryFailedError') {
+        errorMessage = 'Database error occurred during registration';
+        this.logger.error('DB_ERROR during registration', err);
+      }
+
+      throw new CustomHttpException(errorMessage, statusCode);
+    } finally {
+      await queryRunner.release();
+    }
+
+    // Issued after commit so a DB rollback does not leave a dangling OTP in Redis or send a spurious email.
+    // Failure here is non-fatal — the user was created and can request a resend via /resend-otp.
+    try {
+      await this.issueOtp(createUserDto.email);
+    } catch (otpError) {
+      const err = otpError as Error;
+      this.logger.error(`OTP dispatch failed after registration: ${err.message}`, err.stack);
+    }
 
     return {
       status_code: HttpStatus.CREATED,
       message: SYS_MSG.USER_CREATED_SUCCESSFULLY,
-      access_token,
       data: {
+        redirect_url: '/dashboard',
         user: {
           id: saved.id,
           full_name: saved.full_name,
@@ -170,10 +222,16 @@ export default class AuthenticationService {
       throw new CustomHttpException(SYS_MSG.INVALID_OTP, HttpStatus.BAD_REQUEST);
     }
 
-    user.is_verified = true;
-    user.otp_code = null;
-    user.expires_at = null;
-    await this.userRepository.save(user);
+    try {
+      user.is_verified = true;
+      user.otp_code = null;
+      user.expires_at = null;
+      await this.userRepository.save(user);
+    } catch (error) {
+      const err = error as Error;
+      this.logger.error(`OTP verification failed: ${err.message}`, err.stack);
+      throw new CustomHttpException(SYS_MSG.SESSION_CREATION_FAILED, HttpStatus.INTERNAL_SERVER_ERROR);
+    }
 
     await Promise.all([
       this.redisService.del(`otp:${email}`),
@@ -181,13 +239,21 @@ export default class AuthenticationService {
       this.redisService.del(`limit:${email}`),
     ]);
 
-    const access_token = this.jwtService.sign({ id: user.id, sub: user.id, email: user.email });
+    const { rawToken, sessionId } = await this.sessionService.create(user);
+
+    const access_token = this.jwtService.sign({
+      id: user.id,
+      sub: user.id,
+      sid: sessionId,
+      email: user.email,
+    });
 
     return {
       status_code: HttpStatus.OK,
       message: SYS_MSG.EMAIL_VERIFIED,
-      access_token,
       data: {
+        access_token,
+        refresh_token: rawToken,
         user: {
           id: user.id,
           full_name: user.full_name,
