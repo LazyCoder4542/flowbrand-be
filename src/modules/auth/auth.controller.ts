@@ -13,7 +13,7 @@ import authConfig from '@config/auth.config';
 import { CustomHttpException } from '@shared/helpers/custom-http-filter';
 import { SendOtpDto } from './dto/send-otp.dto';
 import { VerifyOtpDto } from './dto/verify-otp.dto';
-import { SendOtpDocs, VerifyOtpDocs, ResendOtpDocs, LoginDocs, ChangePasswordDocs } from './docs/auth-swagger.doc';
+import { SendOtpDocs, VerifyOtpDocs, ResendOtpDocs, LoginDocs, ChangePasswordDocs, RegisterDocs } from './docs/auth-swagger.doc';
 
 @ApiTags('Authentication')
 @Controller('auth')
@@ -21,12 +21,8 @@ export default class RegistrationController {
   constructor(private readonly authService: AuthenticationService) {}
 
   @skipAuth()
+  @RegisterDocs()
   @Post('register')
-  @HttpCode(HttpStatus.CREATED)
-  @ApiOperation({ summary: 'Register a new user' })
-  @ApiBody({ type: CreateUserDTO })
-  @ApiResponse({ status: HttpStatus.CREATED, description: SYS_MSG.USER_CREATED_SUCCESSFULLY })
-  @ApiResponse({ status: HttpStatus.BAD_REQUEST, description: SYS_MSG.USER_ACCOUNT_EXIST })
   async register(@Body() body: CreateUserDTO) {
     return this.authService.createNewUser(body);
   }

@@ -5,14 +5,13 @@ import { randomBytes, createHash } from 'crypto';
 import { User } from '@modules/user/entities/user.entity';
 import { UserSession } from './entities/user-session.entity';
 
-const REFRESH_TOKEN_EXPIRY_DAYS = 7;
-
+const REFRESH_TOKEN_EXPIRY_DAYS = +process.env.REFRESH_TOKEN_EXPIRY
 @Injectable()
 export class SessionService {
   constructor(
     @InjectRepository(UserSession)
     private readonly repo: Repository<UserSession>
-  ) {}
+  ) { }
 
   async create(user: User): Promise<{ rawToken: string; sessionId: string }> {
     const rawToken = randomBytes(32).toString('hex');

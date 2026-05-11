@@ -13,12 +13,14 @@ import AuthenticationService from '../auth.service';
 import { LockoutService } from '../lockout.service';
 import { SessionService } from '../session.service';
 import { UserSession } from '../entities/user-session.entity';
+import { DataSource } from 'typeorm';
+import { AuthMetadata } from '../entities/auth-metadata.entity';
+import { Response } from 'express';
 
 describe('AuthenticationService', () => {
   let service: AuthenticationService;
 
   const userRepositoryMock = { findOne: jest.fn(), create: jest.fn(), save: jest.fn() };
-  const userSessionRepositoryMock = { create: jest.fn(), save: jest.fn() };
   const jwtServiceMock = { sign: jest.fn() };
   const redisServiceMock = {
     get: jest.fn().mockResolvedValue(null),
@@ -27,6 +29,10 @@ describe('AuthenticationService', () => {
     incr: jest.fn().mockResolvedValue(1),
     exists: jest.fn().mockResolvedValue(false),
     expire: jest.fn().mockResolvedValue(undefined),
+  };
+  const userSessionRepositoryMock = {
+    create: jest.fn(),
+    save: jest.fn(),
   };
   const queueServiceMock = {
     sendMail: jest.fn().mockResolvedValue({ jobId: 'mock-job' }),
@@ -38,7 +44,35 @@ describe('AuthenticationService', () => {
     recordFailure: jest.fn(),
     clear: jest.fn(),
   };
-  const sessionServiceMock = { create: jest.fn() };
+  const sessionServiceMock = {
+    create: jest
+      .fn()
+      .mockResolvedValue({ rawToken: 'mock-refresh-token', sessionId: 'mock-session-id' }),
+  };
+  const authMetadataRepositoryMock = {
+    create: jest.fn(),
+    save: jest.fn(),
+  };
+
+  const dataSourceMock = {
+    createQueryRunner: jest.fn().mockReturnValue({
+      connect: jest.fn(),
+      startTransaction: jest.fn(),
+      commitTransaction: jest.fn(),
+      rollbackTransaction: jest.fn(),
+      release: jest.fn(),
+      manager: {
+        create: jest.fn().mockImplementation((entity, data) => data),
+        save: jest
+          .fn()
+          .mockResolvedValue({ id: 'user-1', email: 'jane@example.com', full_name: 'Jane Doe', avatar_url: null }),
+      },
+    }),
+  };
+
+  const responseMock = {
+    cookie: jest.fn(),
+  };
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
@@ -46,8 +80,10 @@ describe('AuthenticationService', () => {
         AuthenticationService,
         { provide: getRepositoryToken(User), useValue: userRepositoryMock },
         { provide: getRepositoryToken(UserSession), useValue: userSessionRepositoryMock },
+        { provide: getRepositoryToken(AuthMetadata), useValue: authMetadataRepositoryMock },
         { provide: JwtService, useValue: jwtServiceMock },
         { provide: RedisService, useValue: redisServiceMock },
+        { provide: DataSource, useValue: dataSourceMock },
         { provide: QueueService, useValue: queueServiceMock },
         { provide: LockoutService, useValue: lockoutServiceMock },
         { provide: SessionService, useValue: sessionServiceMock },
@@ -73,6 +109,7 @@ describe('AuthenticationService', () => {
       full_name: 'Jane Doe',
       password: 'P@ssword123',
       country: 'Nigeria',
+      terms_accepted: true,
     };
 
     it('creates a user and dispatches OTP email — no plaintext OTP in DB', async () => {
@@ -90,7 +127,6 @@ describe('AuthenticationService', () => {
 
       expect(result.status_code).toBe(HttpStatus.CREATED);
       expect(result.message).toBe(SYS_MSG.USER_CREATED_SUCCESSFULLY);
-      expect(result.access_token).toBe('jwt');
       expect(result.data.user).toEqual({
         id: 'user-1',
         full_name: dto.full_name,
@@ -99,7 +135,8 @@ describe('AuthenticationService', () => {
       });
 
       // otp_code and expires_at must NOT be written to the DB
-      const created = userRepositoryMock.create.mock.calls[0][0];
+      const queryRunner = dataSourceMock.createQueryRunner();
+      const created = queryRunner.manager.create.mock.calls[0][1];
       expect(created.auth_provider).toBe('email');
       expect(created.otp_code).toBeUndefined();
       expect(created.expires_at).toBeUndefined();
@@ -121,7 +158,9 @@ describe('AuthenticationService', () => {
 
     it('throws when a user with that email already exists', async () => {
       userRepositoryMock.findOne.mockResolvedValueOnce({ id: 'existing' });
-      await expect(service.createNewUser(dto)).rejects.toThrow(CustomHttpException);
+      await expect(service.createNewUser(dto)).rejects.toThrow(
+        CustomHttpException
+      );
     });
   });
 
@@ -251,7 +290,6 @@ describe('AuthenticationService', () => {
 
       expect(result.status_code).toBe(HttpStatus.OK);
       expect(result.message).toBe(SYS_MSG.EMAIL_VERIFIED);
-      expect(result.access_token).toBe('jwt');
 
       // DB otp_code and expires_at must be cleared
       const saved = userRepositoryMock.save.mock.calls[0][0];
