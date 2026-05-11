@@ -4,13 +4,15 @@ import { HttpStatus } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
+import { DataSource } from 'typeorm';
 import * as SYS_MSG from '@shared/constants/SystemMessages';
 import { CustomHttpException } from '@shared/helpers/custom-http-filter';
 import { User } from '@modules/user/entities/user.entity';
 import AuthenticationService from '../auth.service';
+import { UserSession } from '../entities/user-session.entity';
+import { FRONTEND_RESET_PASSWORD } from '@shared/constants/app-constants';
 import { RedisService } from '@modules/redis/services/redis.service';
 import { EmailService } from '@modules/email/email.service';
-import { UserSession } from '../entities/user-session.entity';
 
 describe('AuthenticationService', () => {
   let service: AuthenticationService;
@@ -19,8 +21,16 @@ describe('AuthenticationService', () => {
     create: jest.fn(),
     save: jest.fn(),
   };
-  const userSessionRepositoryMock = {
-    update: jest.fn(),
+  const queryRunnerMock = {
+    connect: jest.fn().mockResolvedValue(undefined),
+    startTransaction: jest.fn().mockResolvedValue(undefined),
+    commitTransaction: jest.fn().mockResolvedValue(undefined),
+    rollbackTransaction: jest.fn().mockResolvedValue(undefined),
+    release: jest.fn().mockResolvedValue(undefined),
+    manager: { update: jest.fn().mockResolvedValue(undefined) },
+  };
+  const dataSourceMock = {
+    createQueryRunner: jest.fn().mockReturnValue(queryRunnerMock),
   };
   const jwtServiceMock = {
     sign: jest.fn(),
@@ -42,10 +52,10 @@ describe('AuthenticationService', () => {
       providers: [
         AuthenticationService,
         { provide: getRepositoryToken(User), useValue: userRepositoryMock },
-        { provide: getRepositoryToken(UserSession), useValue: userSessionRepositoryMock },
         { provide: JwtService, useValue: jwtServiceMock },
         { provide: RedisService, useValue: redisServiceMock },
         { provide: EmailService, useValue: emailServiceMock },
+        { provide: DataSource, useValue: dataSourceMock },
       ],
     }).compile();
 
@@ -198,7 +208,7 @@ describe('AuthenticationService', () => {
       expect(emailServiceMock.sendForgotPasswordMail).toHaveBeenCalledWith(
         'jane@example.com',
         'Jane Doe',
-        expect.stringContaining('jane@example.com'),
+        FRONTEND_RESET_PASSWORD,
         expect.stringMatching(/^\d{6}$/)
       );
     });
@@ -236,22 +246,23 @@ describe('AuthenticationService', () => {
     it('resets the password and revokes all sessions for a valid OTP', async () => {
       redisServiceMock.get.mockResolvedValueOnce(otp);
       userRepositoryMock.findOne.mockResolvedValueOnce({ id: 'user-1', email, password: 'old-hash' });
-      userRepositoryMock.save.mockResolvedValueOnce(undefined);
-      redisServiceMock.del.mockResolvedValueOnce(undefined);
-      redisServiceMock.delByPattern.mockResolvedValueOnce(undefined);
-      userSessionRepositoryMock.update.mockResolvedValueOnce(undefined);
-
       const result = await service.resetPassword(email, otp, 'NewP@ss123');
 
       expect(result.status_code).toBe(HttpStatus.OK);
       expect(result.message).toBe(SYS_MSG.PASSWORD_UPDATED);
-      expect(userRepositoryMock.save).toHaveBeenCalled();
-      expect(redisServiceMock.del).toHaveBeenCalledWith(key);
-      expect(redisServiceMock.delByPattern).toHaveBeenCalledWith('active_session:user-1:*');
-      expect(userSessionRepositoryMock.update).toHaveBeenCalledWith(
+      expect(queryRunnerMock.commitTransaction).toHaveBeenCalled();
+      expect(queryRunnerMock.manager.update).toHaveBeenCalledWith(
+        User,
+        { id: 'user-1' },
+        { password: expect.any(String) }
+      );
+      expect(queryRunnerMock.manager.update).toHaveBeenCalledWith(
+        UserSession,
         { user_id: 'user-1', is_revoked: false },
         { is_revoked: true, revoked_at: expect.any(Date) }
       );
+      expect(redisServiceMock.delByPattern).toHaveBeenCalledWith('active_session:user-1:*');
+      expect(redisServiceMock.del).toHaveBeenCalledWith(key);
     });
 
     it('throws for an invalid or expired OTP', async () => {

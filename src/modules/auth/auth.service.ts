@@ -1,7 +1,7 @@
 import { HttpStatus, Injectable, Logger } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { DataSource, Repository } from 'typeorm';
 import * as bcrypt from 'bcrypt';
 import * as SYS_MSG from '@shared/constants/SystemMessages';
 import { CustomHttpException } from '@shared/helpers/custom-http-filter';
@@ -25,11 +25,10 @@ export default class AuthenticationService {
   constructor(
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
-    @InjectRepository(UserSession)
-    private readonly userSessionRepository: Repository<UserSession>,
     private readonly jwtService: JwtService,
     private readonly redisService: RedisService,
-    private readonly emailService: EmailService
+    private readonly emailService: EmailService,
+    private readonly dataSource: DataSource
   ) {}
 
   async createNewUser(createUserDto: CreateUserDTO) {
@@ -121,12 +120,7 @@ export default class AuthenticationService {
       const key = `reset_otp:${email}`;
       try {
         await this.redisService.set(key, otp, RESET_OTP_TTL_SECONDS);
-        await this.emailService.sendForgotPasswordMail(
-          email,
-          user.full_name,
-          `${FRONTEND_RESET_PASSWORD}?email=${email}`,
-          otp
-        );
+        await this.emailService.sendForgotPasswordMail(email, user.full_name, FRONTEND_RESET_PASSWORD, otp);
       } catch (err) {
         this.logger.error(
           `Failed to issue password reset OTP for user ${user.id}`,
@@ -154,15 +148,40 @@ export default class AuthenticationService {
       throw new CustomHttpException(SYS_MSG.INCORRECT_TOTP_CODE, HttpStatus.BAD_REQUEST);
     }
 
-    user.password = await this.hashPassword(newPassword);
-    await this.userRepository.save(user);
+    const hashedPassword = await this.hashPassword(newPassword);
 
-    await this.redisService.del(key);
-    await this.redisService.delByPattern(`active_session:${user.id}:*`);
-    await this.userSessionRepository.update(
-      { user_id: user.id, is_revoked: false },
-      { is_revoked: true, revoked_at: new Date() }
-    );
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+    try {
+      await queryRunner.manager.update(User, { id: user.id }, { password: hashedPassword });
+      await queryRunner.manager.update(
+        UserSession,
+        { user_id: user.id, is_revoked: false },
+        { is_revoked: true, revoked_at: new Date() }
+      );
+      await queryRunner.commitTransaction();
+    } catch (err) {
+      await queryRunner.rollbackTransaction();
+      throw err;
+    } finally {
+      await queryRunner.release();
+    }
+
+    // Redis cleanup is best-effort; the DB is the source of truth.
+    // Session cache is purged before the OTP key so a partial failure
+    // still leaves the OTP valid for a safe retry.
+    try {
+      await this.redisService.delByPattern(`active_session:${user.id}:*`);
+    } catch (err) {
+      this.logger.warn(`Failed to purge session cache for user ${user.id}: ${(err as Error).message}`);
+    }
+
+    try {
+      await this.redisService.del(key);
+    } catch (err) {
+      this.logger.warn(`Failed to delete reset OTP key for ${email}: ${(err as Error).message}`);
+    }
 
     return {
       status_code: HttpStatus.OK,

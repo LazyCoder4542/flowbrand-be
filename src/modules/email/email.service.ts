@@ -55,7 +55,7 @@ export class EmailService {
   }
 
   async sendForgotPasswordMail(email: string, name: string, url: string, token: string) {
-    const link = `${url}?token=${token}`;
+    const link = `${url}?email=${encodeURIComponent(email)}&token=${token}`;
     const mailPayload: MailInterface = {
       to: email,
       context: {
