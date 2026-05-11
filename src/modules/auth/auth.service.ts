@@ -26,24 +26,6 @@ const MAX_OTP_ATTEMPTS = 5;
 
 @Injectable()
 export default class AuthenticationService {
-  /**
-   * TODO: Migration Plan - Email Case-Insensitive Uniqueness
-   *
-   * Currently, email normalization (.trim().toLowerCase()) is performed at the application level
-   * in createNewUser(), loginUser(), and handleOAuthLogin(). This is a workaround.
-   *
-   * Recommended next step: Migrate the email column to PostgreSQL citext type to enforce
-   * case-insensitive uniqueness at the database level. This will:
-   * - Eliminate the need for application-level normalization
-   * - Prevent race conditions during user lookup/creation
-   * - Improve query performance for email-based searches
-   *
-   * Migration steps:
-   * 1. Create a migration: ALTER TABLE "user" ALTER COLUMN "email" TYPE citext;
-   * 2. Add unique constraint on citext column if not already present
-   * 3. Remove application-level normalization (optional; keeping it adds defense-in-depth)
-   * 4. Test thoroughly with both uppercase and lowercase email variants
-   */
   private readonly logger = new Logger(AuthenticationService.name);
 
   constructor(
