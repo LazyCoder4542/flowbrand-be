@@ -96,8 +96,14 @@ export default class AuthenticationService {
       await queryRunner.release();
     }
 
-    // Issued after commit so a DB rollback does not leave a dangling OTP in Redis or send a spurious email
-    await this.issueOtp(createUserDto.email);
+    // Issued after commit so a DB rollback does not leave a dangling OTP in Redis or send a spurious email.
+    // Failure here is non-fatal — the user was created and can request a resend via /resend-otp.
+    try {
+      await this.issueOtp(createUserDto.email);
+    } catch (otpError) {
+      const err = otpError as Error;
+      this.logger.error(`OTP dispatch failed after registration: ${err.message}`, err.stack);
+    }
 
     return {
       status_code: HttpStatus.CREATED,
