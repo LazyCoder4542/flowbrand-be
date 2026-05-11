@@ -4,6 +4,7 @@ import { SendOtpDto } from '../dto/send-otp.dto';
 import { VerifyOtpDto } from '../dto/verify-otp.dto';
 import { LoginDto } from '../dto/login.dto';
 import { ChangePasswordDto } from '../dto/change-password.dto';
+import { CreateUserDTO } from '../dto/create-user.dto';
 
 export function SendOtpDocs() {
   return applyDecorators(
@@ -50,6 +51,16 @@ export function LoginDocs() {
       status: HttpStatus.FORBIDDEN,
       description: 'Account locked. Returns remaining lockout seconds in message.',
     })
+  );
+}
+
+export function RegisterDocs() {
+  return applyDecorators(
+    HttpCode(HttpStatus.CREATED),
+    ApiOperation({ summary: 'Register a new user' }),
+    ApiBody({ type: CreateUserDTO }),
+    ApiResponse({ status: HttpStatus.CREATED, description: 'User Created Successfully' }),
+    ApiResponse({ status: HttpStatus.BAD_REQUEST, description: 'Account with the specified email exists' })
   );
 }
 
