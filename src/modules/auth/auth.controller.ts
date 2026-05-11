@@ -8,17 +8,21 @@ import AuthenticationService from './auth.service';
 import { CreateUserDTO } from './dto/create-user.dto';
 import { LoginDto } from './dto/login.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
-<<<<<<< BE-003-reset-password-flow
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
-=======
 import { GoogleOAuthProfile, OAuthLoginResponse } from './dto/google-oauth.dto';
 import authConfig from '@config/auth.config';
 import { CustomHttpException } from '@shared/helpers/custom-http-filter';
 import { SendOtpDto } from './dto/send-otp.dto';
 import { VerifyOtpDto } from './dto/verify-otp.dto';
-import { SendOtpDocs, VerifyOtpDocs, ResendOtpDocs, LoginDocs, ChangePasswordDocs, RegisterDocs } from './docs/auth-swagger.doc';
->>>>>>> dev
+import {
+  SendOtpDocs,
+  VerifyOtpDocs,
+  ResendOtpDocs,
+  LoginDocs,
+  ChangePasswordDocs,
+  RegisterDocs,
+} from './docs/auth-swagger.doc';
 
 @ApiTags('Authentication')
 @Controller('auth')
@@ -57,7 +61,7 @@ export default class RegistrationController {
   async googleAuthRedirect(@Req() req: Request & { user?: GoogleOAuthProfile }, @Res() res: Response): Promise<void> {
     const payload = req.user;
 
-   if (!payload) {
+    if (!payload) {
       const frontend = (authConfig().frontendUrl || '').replace(/\/$/, '');
       const target = frontend ? `${frontend}/login?error=oauth_failed` : '/login?error=oauth_failed';
       res.redirect(HttpStatus.FOUND, target);
@@ -106,7 +110,6 @@ export default class RegistrationController {
   }
 
   @skipAuth()
-<<<<<<< BE-003-reset-password-flow
   @Post('forgot-password')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Request a password reset OTP' })
@@ -125,7 +128,8 @@ export default class RegistrationController {
   @ApiResponse({ status: HttpStatus.BAD_REQUEST, description: SYS_MSG.INCORRECT_TOTP_CODE })
   async resetPassword(@Body() body: ResetPasswordDto) {
     return this.authService.resetPassword(body.email, body.otp, body.newPassword);
-=======
+  }
+
   @Post('send-otp')
   @SendOtpDocs()
   async sendOtp(@Body() body: SendOtpDto) {
@@ -144,6 +148,5 @@ export default class RegistrationController {
   @ResendOtpDocs()
   async resendOtp(@Body() body: SendOtpDto) {
     return this.authService.resendOtp(body.email);
->>>>>>> dev
   }
 }

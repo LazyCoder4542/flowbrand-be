@@ -11,19 +11,13 @@ import { User } from '@modules/user/entities/user.entity';
 import { RedisService } from '@modules/redis/services/redis.service';
 import QueueService from '@modules/email/queue.service';
 import AuthenticationService from '../auth.service';
-<<<<<<< BE-003-reset-password-flow
 import { UserSession } from '../entities/user-session.entity';
 import { FRONTEND_RESET_PASSWORD } from '@shared/constants/app-constants';
-import { RedisService } from '@modules/redis/services/redis.service';
 import { EmailService } from '@modules/email/email.service';
-=======
 import { LockoutService } from '../lockout.service';
 import { SessionService } from '../session.service';
-import { UserSession } from '../entities/user-session.entity';
-import { DataSource } from 'typeorm';
 import { AuthMetadata } from '../entities/auth-metadata.entity';
 import { Response } from 'express';
->>>>>>> dev
 
 describe('AuthenticationService', () => {
   let service: AuthenticationService;
@@ -37,6 +31,7 @@ describe('AuthenticationService', () => {
     incr: jest.fn().mockResolvedValue(1),
     exists: jest.fn().mockResolvedValue(false),
     expire: jest.fn().mockResolvedValue(undefined),
+    delByPattern: jest.fn(),
   };
   const userSessionRepositoryMock = {
     create: jest.fn(),
@@ -53,57 +48,31 @@ describe('AuthenticationService', () => {
     clear: jest.fn(),
   };
   const sessionServiceMock = {
-    create: jest
-      .fn()
-      .mockResolvedValue({ rawToken: 'mock-refresh-token', sessionId: 'mock-session-id' }),
+    create: jest.fn().mockResolvedValue({ rawToken: 'mock-refresh-token', sessionId: 'mock-session-id' }),
   };
   const authMetadataRepositoryMock = {
     create: jest.fn(),
     save: jest.fn(),
   };
-<<<<<<< BE-003-reset-password-flow
   const queryRunnerMock = {
     connect: jest.fn().mockResolvedValue(undefined),
     startTransaction: jest.fn().mockResolvedValue(undefined),
     commitTransaction: jest.fn().mockResolvedValue(undefined),
     rollbackTransaction: jest.fn().mockResolvedValue(undefined),
     release: jest.fn().mockResolvedValue(undefined),
-    manager: { update: jest.fn().mockResolvedValue(undefined) },
+    manager: {
+      create: jest.fn().mockImplementation((entity, data) => data),
+      save: jest
+        .fn()
+        .mockResolvedValue({ id: 'user-1', email: 'jane@example.com', full_name: 'Jane Doe', avatar_url: null }),
+      update: jest.fn().mockResolvedValue(undefined),
+    },
   };
   const dataSourceMock = {
     createQueryRunner: jest.fn().mockReturnValue(queryRunnerMock),
   };
-  const jwtServiceMock = {
-    sign: jest.fn(),
-=======
-
-  const dataSourceMock = {
-    createQueryRunner: jest.fn().mockReturnValue({
-      connect: jest.fn(),
-      startTransaction: jest.fn(),
-      commitTransaction: jest.fn(),
-      rollbackTransaction: jest.fn(),
-      release: jest.fn(),
-      manager: {
-        create: jest.fn().mockImplementation((entity, data) => data),
-        save: jest
-          .fn()
-          .mockResolvedValue({ id: 'user-1', email: 'jane@example.com', full_name: 'Jane Doe', avatar_url: null }),
-      },
-    }),
-  };
-
   const responseMock = {
     cookie: jest.fn(),
->>>>>>> dev
-  };
-  const redisServiceMock = {
-    get: jest.fn(),
-    set: jest.fn(),
-    del: jest.fn(),
-    exists: jest.fn(),
-    incr: jest.fn(),
-    delByPattern: jest.fn(),
   };
   const emailServiceMock = {
     sendForgotPasswordMail: jest.fn(),
@@ -118,15 +87,11 @@ describe('AuthenticationService', () => {
         { provide: getRepositoryToken(AuthMetadata), useValue: authMetadataRepositoryMock },
         { provide: JwtService, useValue: jwtServiceMock },
         { provide: RedisService, useValue: redisServiceMock },
-<<<<<<< BE-003-reset-password-flow
         { provide: EmailService, useValue: emailServiceMock },
-        { provide: DataSource, useValue: dataSourceMock },
-=======
         { provide: DataSource, useValue: dataSourceMock },
         { provide: QueueService, useValue: queueServiceMock },
         { provide: LockoutService, useValue: lockoutServiceMock },
         { provide: SessionService, useValue: sessionServiceMock },
->>>>>>> dev
       ],
     }).compile();
 
@@ -198,9 +163,7 @@ describe('AuthenticationService', () => {
 
     it('throws when a user with that email already exists', async () => {
       userRepositoryMock.findOne.mockResolvedValueOnce({ id: 'existing' });
-      await expect(service.createNewUser(dto)).rejects.toThrow(
-        CustomHttpException
-      );
+      await expect(service.createNewUser(dto)).rejects.toThrow(CustomHttpException);
     });
   });
 
@@ -243,13 +206,10 @@ describe('AuthenticationService', () => {
         email: 'jane@example.com',
         password: hashed,
       });
-<<<<<<< BE-003-reset-password-flow
-=======
       lockoutServiceMock.findOrCreate.mockResolvedValueOnce(metaMock);
       lockoutServiceMock.isLocked.mockReturnValueOnce(false);
       lockoutServiceMock.recordFailure.mockResolvedValueOnce(undefined);
 
->>>>>>> dev
       await expect(service.loginUser({ email: 'jane@example.com', password: 'wrong-password' })).rejects.toThrow(
         CustomHttpException
       );

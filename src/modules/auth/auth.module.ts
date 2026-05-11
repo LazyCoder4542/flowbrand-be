@@ -13,12 +13,7 @@ import { GoogleStrategy } from '../strategies/google.strategy';
 import { LockoutService } from './lockout.service';
 import { SessionService } from './session.service';
 import type { StringValue } from 'ms';
-<<<<<<< BE-003-reset-password-flow
-import { EmailModule } from '@modules/email/email.module';
-import { EmailService } from '@modules/email/email.service';
-=======
 import { User } from '@modules/user/entities/user.entity';
->>>>>>> dev
 
 const expiry = authConfig().jwtExpiry;
 @Module({
@@ -49,11 +44,6 @@ const expiry = authConfig().jwtExpiry;
         expiresIn: `${expiry}` as unknown as StringValue,
       },
     }),
-<<<<<<< BE-003-reset-password-flow
-    EmailModule,
-=======
-    RedisModule,
->>>>>>> dev
   ],
   exports: [],
 })

@@ -8,19 +8,11 @@ import authConfig from '@config/auth.config';
 import * as SYS_MSG from '@shared/constants/SystemMessages';
 import { CustomHttpException } from '@shared/helpers/custom-http-filter';
 import { User } from '@modules/user/entities/user.entity';
-import { UserSession } from './entities/user-session.entity';
 import { CreateUserDTO } from './dto/create-user.dto';
 import { LoginDto } from './dto/login.dto';
-<<<<<<< BE-003-reset-password-flow
-import { RedisService } from '@modules/redis/services/redis.service';
-import { randomInt } from 'crypto';
 import { EmailService } from '@modules/email/email.service';
 import { FRONTEND_RESET_PASSWORD } from '@shared/constants/app-constants';
 
-const OTP_LENGTH = 6;
-const OTP_EXPIRY_MINUTES = 10;
-const RESET_OTP_TTL_SECONDS = 300;
-=======
 import { UserSession } from './entities/user-session.entity';
 import { GoogleOAuthProfile, OAuthLoginResponse } from './dto/google-oauth.dto';
 import { v4 as uuidv4 } from 'uuid';
@@ -34,7 +26,7 @@ const OTP_LENGTH = 6;
 const OTP_TTL_SECONDS = 300; // 5 minutes
 const OTP_RESEND_COOLDOWN_SECONDS = 30;
 const MAX_OTP_ATTEMPTS = 5;
->>>>>>> dev
+const RESET_OTP_TTL_SECONDS = 300;
 
 @Injectable()
 export default class AuthenticationService {
@@ -43,25 +35,18 @@ export default class AuthenticationService {
   constructor(
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
-<<<<<<< BE-003-reset-password-flow
-    private readonly jwtService: JwtService,
-    private readonly redisService: RedisService,
-    private readonly emailService: EmailService,
-    private readonly dataSource: DataSource
-  ) {}
-=======
     @InjectRepository(UserSession)
     private readonly userSessionRepository: Repository<UserSession>,
     private readonly jwtService: JwtService,
     private readonly redisService: RedisService,
+    private readonly emailService: EmailService,
+    private readonly dataSource: DataSource,
     private readonly queueService: QueueService,
     private readonly lockoutService: LockoutService,
     private readonly sessionService: SessionService,
     @InjectRepository(AuthMetadata)
-    private readonly authMetaData: Repository<AuthMetadata>,
-    private readonly dataSource: DataSource,
-  ) { }
->>>>>>> dev
+    private readonly authMetaData: Repository<AuthMetadata>
+  ) {}
 
   async createNewUser(createUserDto: CreateUserDTO) {
     // Normalize email: trim whitespace and convert to lowercase
@@ -74,21 +59,7 @@ export default class AuthenticationService {
       throw new CustomHttpException(SYS_MSG.USER_ACCOUNT_EXIST, HttpStatus.BAD_REQUEST);
     }
 
-<<<<<<< BE-003-reset-password-flow
     const hashedPassword = await this.hashPassword(createUserDto.password);
-    const user = this.userRepository.create({
-      email: createUserDto.email,
-      full_name: createUserDto.full_name,
-      country: createUserDto.country ?? null,
-      password: hashedPassword,
-      auth_provider: 'email',
-      otp_code: this.generateOtp(),
-      expires_at: this.computeOtpExpiry(),
-    });
-    const saved = await this.userRepository.save(user);
-=======
-    const hashedPassword = await bcrypt.hash(createUserDto.password, 10);
->>>>>>> dev
 
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
@@ -399,7 +370,6 @@ export default class AuthenticationService {
     };
   }
 
-<<<<<<< BE-003-reset-password-flow
   async forgotPassword(email: string) {
     const user = await this.userRepository.findOne({ where: { email } });
     if (user) {
@@ -486,7 +456,8 @@ export default class AuthenticationService {
     }
     const max = 10 ** length;
     return randomInt(0, max).toString().padStart(length, '0');
-=======
+  }
+
   private hashRefreshToken(token: string): string {
     const secret = authConfig().jwtRefreshSecret;
 
@@ -512,12 +483,5 @@ export default class AuthenticationService {
       variant: 'register-otp',
       mail: { to: email, context: { otp, email } },
     });
-  }
-
-  private generateOtp(): string {
-    return Math.floor(Math.random() * 10 ** OTP_LENGTH)
-      .toString()
-      .padStart(OTP_LENGTH, '0');
->>>>>>> dev
   }
 }
