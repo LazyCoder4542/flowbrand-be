@@ -430,3 +430,11 @@ package-lock.json
 docker-compose.yml
 data/
 .dev.env
+
+## Local DB management scripts - ignore in repo
+# These scripts are intended for local development only (create/drop/add-checks).
+# Keep local copies out of source control.
+create-db.js
+recreate-db.js
+add-column.js
+check-tables.js

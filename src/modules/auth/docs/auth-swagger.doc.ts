@@ -33,9 +33,8 @@ export function ResendOtpDocs() {
     ApiBody({ type: SendOtpDto }),
     ApiResponse({ status: HttpStatus.OK, description: 'OTP sent successfully' }),
     ApiResponse({ status: HttpStatus.TOO_MANY_REQUESTS, description: 'Rate limit exceeded' })
-  )
+  );
 }
-
 
 export function LoginDocs() {
   return applyDecorators(

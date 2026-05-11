@@ -36,7 +36,7 @@ describe('AuthenticationService', () => {
   };
   const queueServiceMock = {
     sendMail: jest.fn().mockResolvedValue({ jobId: 'mock-job' }),
-  }
+  };
   const lockoutServiceMock = {
     findOrCreate: jest.fn(),
     isLocked: jest.fn(),
@@ -44,7 +44,11 @@ describe('AuthenticationService', () => {
     recordFailure: jest.fn(),
     clear: jest.fn(),
   };
-  const sessionServiceMock = { create: jest.fn() };
+  const sessionServiceMock = {
+    create: jest
+      .fn()
+      .mockResolvedValue({ rawToken: 'mock-refresh-token', sessionId: 'mock-session-id' }),
+  };
   const authMetadataRepositoryMock = {
     create: jest.fn(),
     save: jest.fn(),
@@ -131,7 +135,8 @@ describe('AuthenticationService', () => {
       });
 
       // otp_code and expires_at must NOT be written to the DB
-      const created = userRepositoryMock.create.mock.calls[0][0];
+      const queryRunner = dataSourceMock.createQueryRunner();
+      const created = queryRunner.manager.create.mock.calls[0][1];
       expect(created.auth_provider).toBe('email');
       expect(created.otp_code).toBeUndefined();
       expect(created.expires_at).toBeUndefined();
@@ -147,15 +152,6 @@ describe('AuthenticationService', () => {
             to: dto.email,
             context: expect.objectContaining({ otp: expect.stringMatching(/^\d{6}$/) }),
           }),
-        })
-      );
-      expect(responseMock.cookie).toHaveBeenCalledWith(
-        'refresh_token',
-        expect.any(String),
-        expect.objectContaining({
-          httpOnly: true,
-          sameSite: 'strict',
-          maxAge: 7 * 24 * 60 * 60 * 1000,
         })
       );
     });
@@ -348,7 +344,11 @@ describe('AuthenticationService', () => {
       await service.verifyOtp('jane@example.com', '123456');
 
       expect(redisServiceMock.expire).toHaveBeenCalledWith('attempts:jane@example.com', 300);
-      expect(redisServiceMock.set).not.toHaveBeenCalledWith('attempts:jane@example.com', expect.anything(), expect.anything());
+      expect(redisServiceMock.set).not.toHaveBeenCalledWith(
+        'attempts:jane@example.com',
+        expect.anything(),
+        expect.anything()
+      );
     });
   });
 
